@@ -1,0 +1,148 @@
+@import 'tailwindcss';
+@import '@kiro/ui/styles.css';
+
+@theme {
+  /* Native system fonts: zero download, crisp rendering, works offline. */
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', 'Inter',
+    'Cantarell', 'Noto Sans', 'Helvetica Neue', Arial, sans-serif;
+}
+
+@keyframes kiro-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: var(--color-ink-950);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Desktop apps don't rubber-band or show the browser's tap highlight. */
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    font-family: var(--font-sans);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-accent) 40%, transparent);
+  }
+
+  /*
+   * Moving focus with the keys scrolls the item clear of the floating header,
+   * with its row's heading, and a little way above the bottom edge.
+   */
+  main > :not(header) :focus {
+    scroll-margin-block: 7rem 3rem;
+  }
+
+  /* Slim, unobtrusive scrollbars across webviews (Chromium/WebView2, WebKit). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-700) transparent;
+  }
+}
+
+/*
+ * Player sliders: a thin track filled up to the value (`--fill`), and a thumb
+ * that appears on hover or focus.
+ */
+.kiro-range {
+  height: 1.25rem;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.kiro-range:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.kiro-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-accent) var(--fill, 0%),
+    rgb(255 255 255 / 0.22) var(--fill, 0%)
+  );
+  transition: height 150ms ease;
+}
+.kiro-range:hover::-webkit-slider-runnable-track {
+  height: 6px;
+}
+.kiro-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgb(132 60 251 / 0.35);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.kiro-range:hover::-webkit-slider-thumb,
+.kiro-range:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+}
+.kiro-range:hover::-webkit-slider-thumb {
+  margin-top: -4px;
+}
+.kiro-range:focus-visible {
+  outline: none;
+}
+.kiro-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.22);
+}
+.kiro-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+.kiro-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+}
+/* Settings sliders: the thumb always shows, and focus strengthens its ring. */
+.kiro-range-thumb::-webkit-slider-thumb {
+  opacity: 1;
+}
+.kiro-range-thumb:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 3px var(--color-ink-950),
+    0 0 0 5px var(--color-accent);
+}
+.kiro-range-thumb:focus-visible::-moz-range-thumb {
+  box-shadow:
+    0 0 0 3px var(--color-ink-950),
+    0 0 0 5px var(--color-accent);
+}
+
+/*
+ * Snapping would pull a row back to a card's start, half hiding the card just
+ * reached at the far edge; it stays off while the keys are in the row.
+ * Unlayered, to override the `snap-x` utility.
+ */
+[data-nav-group]:has([data-nav-focus]) {
+  scroll-snap-type: none;
+}
+
+/*
+ * While the native player is open, the document is transparent so the
+ * libmpv video layer beneath the webview shows through. Unlayered, so it
+ * overrides the base layer above.
+ */
+html.kiro-video-mode,
+html.kiro-video-mode body {
+  background: transparent;
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-defaults"
+description = "Enables the addon_defaults command without any pre-configured scope."
+commands.allow = ["addon_defaults"]
+
+[[permission]]
+identifier = "deny-addon-defaults"
+description = "Denies the addon_defaults command without any pre-configured scope."
+commands.deny = ["addon_defaults"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-list"
+description = "Enables the addon_list command without any pre-configured scope."
+commands.allow = ["addon_list"]
+
+[[permission]]
+identifier = "deny-addon-list"
+description = "Denies the addon_list command without any pre-configured scope."
+commands.deny = ["addon_list"]

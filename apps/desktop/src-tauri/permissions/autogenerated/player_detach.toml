@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-detach"
+description = "Enables the player_detach command without any pre-configured scope."
+commands.allow = ["player_detach"]
+
+[[permission]]
+identifier = "deny-player-detach"
+description = "Denies the player_detach command without any pre-configured scope."
+commands.deny = ["player_detach"]

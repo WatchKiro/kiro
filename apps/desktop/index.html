@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Kiro</title>
+    <!--
+      Splash: painted on the first frame, before the bundle loads, and faded out
+      by src/app/splash.tsx once the first screen has rendered. Plain CSS only.
+      Colours are the tokens in packages/ui/src/styles.css (ink-950, accent, glow).
+    -->
+    <style>
+      html {
+        background: #08070d;
+      }
+
+      #kiro-splash {
+        --ks-size: clamp(120px, 26vmin, 220px);
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: grid;
+        place-items: center;
+        background: #08070d;
+        /* Fails safe: fades out on its own if the app never takes over. */
+        animation: ks-leave 0.4s ease-out 10s forwards;
+      }
+
+      #kiro-splash[data-leaving] {
+        animation: ks-leave 0.36s ease-out forwards;
+        pointer-events: none;
+      }
+
+      .ks-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+
+      .ks-stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: var(--ks-size);
+        height: var(--ks-size);
+        animation: ks-enter 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+
+      #kiro-splash[data-leaving] .ks-stage {
+        animation: ks-stage-leave 0.36s ease-in forwards;
+      }
+
+      .ks-glow {
+        position: absolute;
+        inset: -70%;
+        border-radius: 50%;
+        background:
+          radial-gradient(closest-side at 44% 46%, rgb(132 60 251 / 0.7), transparent 72%),
+          radial-gradient(closest-side at 60% 58%, rgb(93 123 255 / 0.45), transparent 76%);
+        filter: blur(24px);
+        animation: ks-glow 3s ease-in-out infinite alternate;
+      }
+
+      .ks-mascot {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+        filter: drop-shadow(0 18px 36px rgb(8 7 13 / 0.6));
+        animation: ks-float 3s ease-in-out infinite alternate;
+      }
+
+      .ks-shadow {
+        position: absolute;
+        bottom: -12%;
+        width: 52%;
+        height: 9%;
+        border-radius: 50%;
+        background: radial-gradient(closest-side, rgb(4 3 10 / 0.75), transparent);
+        animation: ks-shadow 3s ease-in-out infinite alternate;
+      }
+
+      .ks-mascot .fin {
+        transform-box: fill-box;
+        transform-origin: 92% 8%;
+        animation: ks-wave 3.6s ease-in-out 0.8s infinite;
+      }
+
+      .ks-mascot .eye-left,
+      .ks-mascot .eye-right {
+        transform-box: fill-box;
+        transform-origin: center;
+        animation: ks-blink 4.2s ease-in-out 1.2s infinite;
+      }
+
+      @keyframes ks-enter {
+        from {
+          opacity: 0;
+          transform: scale(0.92);
+        }
+      }
+
+      @keyframes ks-leave {
+        to {
+          opacity: 0;
+          visibility: hidden;
+        }
+      }
+
+      @keyframes ks-stage-leave {
+        to {
+          transform: scale(1.06);
+        }
+      }
+
+      @keyframes ks-float {
+        from {
+          transform: translateY(4%);
+        }
+        to {
+          transform: translateY(-4%);
+        }
+      }
+
+      @keyframes ks-shadow {
+        from {
+          opacity: 0.9;
+          transform: scaleX(1);
+        }
+        to {
+          opacity: 0.5;
+          transform: scaleX(0.78);
+        }
+      }
+
+      @keyframes ks-glow {
+        from {
+          opacity: 0.6;
+          transform: scale(0.94);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1.04);
+        }
+      }
+
+      @keyframes ks-blink {
+        0%,
+        88%,
+        100% {
+          transform: scaleY(1);
+        }
+        91% {
+          transform: scaleY(0.1);
+        }
+        94% {
+          transform: scaleY(1);
+        }
+      }
+
+      @keyframes ks-wave {
+        0%,
+        55%,
+        100% {
+          transform: rotate(0);
+        }
+        65% {
+          transform: rotate(16deg);
+        }
+        75% {
+          transform: rotate(-3deg);
+        }
+        85% {
+          transform: rotate(10deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #kiro-splash * {
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="kiro-splash" role="status">
+      <span class="ks-label">Loading Kiro</span>
+      <div class="ks-stage" aria-hidden="true">
+        <div class="ks-glow"></div>
+        <div class="ks-shadow"></div>
+        <svg class="ks-mascot" viewBox="110 150 1020 1020" aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient
+              id="ks-body-fill"
+              gradientUnits="userSpaceOnUse"
+              x1="350"
+              y1="250"
+              x2="900"
+              y2="1000"
+            >
+              <stop offset="0" stop-color="#f8f8fb" />
+              <stop offset="1" stop-color="#f8f7fb" />
+            </linearGradient>
+            <linearGradient
+              id="ks-underside-fill"
+              gradientUnits="userSpaceOnUse"
+              x1="640"
+              y1="660"
+              x2="640"
+              y2="1110"
+            >
+              <stop offset="0" stop-color="#cdc3fc" />
+              <stop offset="0.50" stop-color="#cbc1fb" />
+              <stop offset="1" stop-color="#c8befa" />
+            </linearGradient>
+            <linearGradient
+              id="ks-fin-rim-fill"
+              gradientUnits="userSpaceOnUse"
+              x1="260"
+              y1="650"
+              x2="180"
+              y2="930"
+            >
+              <stop offset="0" stop-color="#cdc2fc" />
+              <stop offset="1" stop-color="#c9befa" />
+            </linearGradient>
+            <linearGradient
+              id="ks-visor-fill"
+              gradientUnits="userSpaceOnUse"
+              x1="700"
+              y1="350"
+              x2="900"
+              y2="840"
+            >
+              <stop offset="0" stop-color="#231a3a" />
+              <stop offset="0.5" stop-color="#241a3b" />
+            </linearGradient>
+            <linearGradient
+              id="ks-eye-fill"
+              gradientUnits="userSpaceOnUse"
+              x1="800"
+              y1="490"
+              x2="900"
+              y2="725"
+            >
+              <stop offset="0" stop-color="#fefdfd" />
+              <stop offset="1" stop-color="#fdfdfd" />
+            </linearGradient>
+            <clipPath id="ks-body-clip" clipPathUnits="userSpaceOnUse">
+              <path
+                d="M 315.69 949.26 C 243.99 865.97 197.9 754.5 200.56 643.46 C 204.35 485.27 299.23 332.95 437.26 256.26 C 505.78 218.19 582.84 196.69 661.5 196.69 C 811.96 196.69 954.05 281.54 1037.6 404.4 C 1088.61 479.43 1114.5 569.06 1114.5 659.5 C 1114.5 691.17 1111.96 722.79 1104.69 753.69 C 1080.53 856.35 1017.21 950.63 932.88 1013.88 C 892.65 1044.06 848.76 1069.6 801.02 1086.02 C 674.63 1129.5 534.46 1113.94 421.4 1042.6 C 381.32 1017.3 346.51 985.08 315.69 949.26 Z"
+              />
+            </clipPath>
+          </defs>
+          <g class="body">
+            <path
+              class="body-silhouette"
+              d="M 315.69 949.26 C 243.99 865.97 197.9 754.5 200.56 643.46 C 204.35 485.27 299.23 332.95 437.26 256.26 C 505.78 218.19 582.84 196.69 661.5 196.69 C 811.96 196.69 954.05 281.54 1037.6 404.4 C 1088.61 479.43 1114.5 569.06 1114.5 659.5 C 1114.5 691.17 1111.96 722.79 1104.69 753.69 C 1080.53 856.35 1017.21 950.63 932.88 1013.88 C 892.65 1044.06 848.76 1069.6 801.02 1086.02 C 674.63 1129.5 534.46 1113.94 421.4 1042.6 C 381.32 1017.3 346.51 985.08 315.69 949.26 Z"
+              fill="url(#ks-body-fill)"
+            />
+          </g>
+          <g class="underside-shading" clip-path="url(#ks-body-clip)">
+            <path
+              class="lavender-underside"
+              d="M 334 660 C 342 668 345 678 350 686.7 C 364.5 715.7 378.29 744.85 395 772.7 C 417.08 809.49 443.15 844.25 473 875.1 C 521.85 925.58 582.4 965.42 650 985.7 C 723.26 1007.68 804.84 1006.65 878 984.7 C 912.37 974.39 945.77 960.8 977 943.1 C 998.13 931.12 1016.87 916.12 1037 902.7 L 1160 885 L 1160 1180 L 170 1180 L 170 800 Z"
+              fill="url(#ks-underside-fill)"
+            />
+          </g>
+          <g class="fin">
+            <path
+              class="fin-lavender-rim"
+              d="M 304.03 658.03 C 309.04 657.43 314.15 657.28 319.17 657.83 C 328.29 658.85 339.31 664.41 343.57 673.03 C 348.16 682.35 349.5 695.29 349.5 705.5 C 349.5 744.09 336.97 783.41 315.1 815.1 C 292.35 848.07 260.45 877.88 225.43 897.43 C 208.68 906.79 190.83 914.66 171.3 915.03 C 166.6 915.12 162.07 914.58 157.5 913.5 C 134.42 908.03 124.07 886.34 122.7 864.3 C 120.39 827.03 140.94 789.36 162.37 760.37 C 186.94 727.12 217.11 699.84 252.57 678.57 C 268 669.31 285.95 660.23 304.03 658.03 Z"
+              transform="translate(0 13)"
+              fill="url(#ks-fin-rim-fill)"
+            />
+            <path
+              class="fin-upper-lip"
+              d="M 297.95 649.95 C 307.7 649.13 318.19 651.47 326.68 656.32 C 329.05 657.67 331.83 659.06 333.59 661.23 C 333.83 661.52 334.23 662.05 333.95 662.32 C 332.99 663.28 331.36 661.46 330.14 660.86 C 327.16 659.43 324.43 658.33 321.14 657.86 C 312.72 656.66 303.7 657.39 295.5 659.5 C 271.96 665.55 248.74 678.88 229.5 693.5 C 223.44 698.1 217.35 702.63 211.5 707.5 C 210.43 708.39 207.3 712.22 205.5 710.77 C 202.71 708.52 203.42 701.64 204.95 698.95 C 206.77 695.78 210.54 693.57 213.23 691.23 C 217.53 687.47 221.95 683.96 226.5 680.5 C 247.2 664.77 271.75 652.18 297.95 649.95 Z"
+              fill="url(#ks-fin-rim-fill)"
+            />
+            <path
+              class="fin-white-face"
+              d="M 304.03 658.03 C 309.04 657.43 314.15 657.28 319.17 657.83 C 328.29 658.85 339.31 664.41 343.57 673.03 C 348.16 682.35 349.5 695.29 349.5 705.5 C 349.5 744.09 336.97 783.41 315.1 815.1 C 292.35 848.07 260.45 877.88 225.43 897.43 C 208.68 906.79 190.83 914.66 171.3 915.03 C 166.6 915.12 162.07 914.58 157.5 913.5 C 134.42 908.03 124.07 886.34 122.7 864.3 C 120.39 827.03 140.94 789.36 162.37 760.37 C 186.94 727.12 217.11 699.84 252.57 678.57 C 268 669.31 285.95 660.23 304.03 658.03 Z"
+              fill="url(#ks-body-fill)"
+            />
+          </g>
+          <g class="visor">
+            <path
+              class="visor-panel"
+              d="M 867.96 347.96 C 891.3 346.02 915.53 347.22 938.35 352.65 C 959.02 357.58 978.3 366.82 994.96 380.04 C 1010.49 392.35 1023.07 408.82 1033.5 425.5 C 1051.18 453.78 1064.31 485.21 1073.88 517.12 C 1077 527.49 1080 537.84 1082.65 548.35 C 1087.94 569.23 1092.33 590.52 1095.12 611.88 C 1097.21 627.97 1099 644.69 1096.88 660.88 C 1091.79 699.97 1066.18 732.99 1032.42 752.42 C 1018.45 760.47 1003.03 766.24 988.04 772.04 C 904.62 804.29 818.29 829.43 728.88 836.88 C 691.15 840.03 649.59 837.55 615.5 819.5 C 562.64 791.51 531.12 732.81 512.88 678.12 C 505.21 655.1 500.22 631.79 499.5 607.5 C 499.35 602.49 498.45 597.51 498.5 592.5 C 498.69 573.45 502.19 553.23 509.65 535.65 C 530.59 486.35 570.74 452.48 616.27 426.27 C 653.41 404.89 692.82 388.58 733.65 375.65 C 777.29 361.85 822.3 351.77 867.96 347.96 Z"
+              fill="url(#ks-visor-fill)"
+            />
+          </g>
+          <g class="eyes" fill="url(#ks-eye-fill)">
+            <g class="eye-left">
+              <path
+                d="M 734.95 544.95 C 738.69 544.44 742.4 544.33 746.14 544.86 C 776.09 549.14 781.34 583.54 787.5 607.5 C 789.13 613.84 790.87 620.16 792.5 626.5 C 794.43 634.01 796.06 641.59 797.86 649.14 C 800.87 661.69 804.53 674.17 803.23 687.23 C 801.38 705.72 788.51 723.03 769.23 725.23 C 765.45 725.66 761.63 725.67 757.86 725.14 C 732.91 721.57 726.54 694.33 720.95 674.05 C 719.51 668.81 718.12 663.56 716.68 658.32 C 715.23 653.06 713.95 647.76 712.5 642.5 C 711.05 637.23 709.68 631.97 708.32 626.68 C 702.53 604.19 694.47 575.93 712.77 556.77 C 715.38 554.05 718.6 551.73 721.86 549.86 C 725.79 547.62 730.44 545.58 734.95 544.95 Z"
+              />
+            </g>
+            <g class="eye-right">
+              <path
+                d="M 962.77 488.14 C 967.24 488.14 971.69 488.62 975.95 490.05 C 996.31 496.83 1002.03 520.74 1007.05 538.95 C 1008.48 544.17 1009.88 549.4 1011.41 554.59 C 1013.26 560.9 1014.57 567.34 1016.32 573.68 C 1018.64 582.13 1020.82 590.62 1022.86 599.14 C 1025.66 610.8 1028.69 621.99 1027.14 634.14 C 1024.91 651.49 1012.63 667.9 994.14 669.14 C 990.71 669.37 987.51 668.68 984.23 667.77 C 961.75 661.58 957.03 635.73 951.68 616.32 C 950.52 612.12 949.48 607.88 948.32 603.68 C 946.3 596.35 944.34 589.01 942.32 581.68 C 940.01 573.3 937.81 564.88 935.5 556.5 C 932.11 544.17 928.8 531.07 931.23 518.23 C 934.04 503.35 946.42 488.14 962.77 488.14 Z"
+              />
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

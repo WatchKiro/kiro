@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-watchlist-add"
+description = "Enables the library_watchlist_add command without any pre-configured scope."
+commands.allow = ["library_watchlist_add"]
+
+[[permission]]
+identifier = "deny-library-watchlist-add"
+description = "Denies the library_watchlist_add command without any pre-configured scope."
+commands.deny = ["library_watchlist_add"]

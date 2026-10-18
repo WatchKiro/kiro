@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-audio-delay"
+description = "Enables the player_set_audio_delay command without any pre-configured scope."
+commands.allow = ["player_set_audio_delay"]
+
+[[permission]]
+identifier = "deny-player-set-audio-delay"
+description = "Denies the player_set_audio_delay command without any pre-configured scope."
+commands.deny = ["player_set_audio_delay"]

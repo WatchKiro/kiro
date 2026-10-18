@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-restore-defaults"
+description = "Enables the addon_restore_defaults command without any pre-configured scope."
+commands.allow = ["addon_restore_defaults"]
+
+[[permission]]
+identifier = "deny-addon-restore-defaults"
+description = "Denies the addon_restore_defaults command without any pre-configured scope."
+commands.deny = ["addon_restore_defaults"]

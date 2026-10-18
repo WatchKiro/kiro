@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-load"
+description = "Enables the player_load command without any pre-configured scope."
+commands.allow = ["player_load"]
+
+[[permission]]
+identifier = "deny-player-load"
+description = "Denies the player_load command without any pre-configured scope."
+commands.deny = ["player_load"]

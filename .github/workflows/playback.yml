@@ -1,0 +1,141 @@
+# Native playback on Windows and Linux: builds the desktop app with libmpv,
+# runs the Rust checks with the player compiled in, and plays a test pattern
+# through the real video surface under the webview, checking a screenshot
+# (apps/desktop/scripts/playback-smoke.mjs). Screenshots and logs are kept as
+# artifacts. macOS is checked locally (docs/playback.md, Verification).
+name: Playback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - .github/workflows/playback.yml
+      - pnpm-lock.yaml
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - .github/workflows/playback.yml
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: playback-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  MANIFEST: apps/desktop/src-tauri/Cargo.toml
+
+jobs:
+  linux:
+    name: Linux (X11)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev libmpv-dev \
+            xvfb imagemagick mesa-utils libgl1-mesa-dri
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Clippy (with the player)
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --features libmpv -- -D warnings
+      - name: Tests (with the player)
+        run: xvfb-run -a cargo test --manifest-path "$MANIFEST" --features libmpv
+      - name: Build
+        run: cargo build --manifest-path "$MANIFEST" --features libmpv
+
+      - name: Smoke test (Xvfb, Mesa software GL)
+        working-directory: apps/desktop
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/playback-smoke.mjs "$RUNNER_TEMP/smoke"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-linux
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      # shinchiro/mpv-winbuild-cmake: mpv-dev with libmpv-2.dll. Pinned so
+      # runs are reproducible; the latest build is used if this one is gone.
+      MPV_WINBUILD_TAG: '20261017'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: libmpv
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP 'mpv'
+          $download = @('release', 'download', '--repo', 'shinchiro/mpv-winbuild-cmake',
+                        '--pattern', 'mpv-dev-x86_64-2*.7z', '--dir', $env:RUNNER_TEMP)
+          gh @download $env:MPV_WINBUILD_TAG
+          if ($LASTEXITCODE -ne 0) { gh @download }
+          if ($LASTEXITCODE -ne 0) { throw 'could not download mpv-dev' }
+          $archive = Get-ChildItem $env:RUNNER_TEMP -Filter 'mpv-dev-x86_64-*.7z' | Select-Object -First 1
+          Write-Host "Using $($archive.Name)"
+          7z x $archive.FullName "-o$dest" -y | Out-Null
+          if (-not (Test-Path (Join-Path $dest 'libmpv-2.dll'))) { throw 'libmpv-2.dll not found' }
+          "KIRO_LIBMPV_DIR=$dest" >> $env:GITHUB_ENV
+          $dest >> $env:GITHUB_PATH
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Clippy (with the player)
+        run: cargo clippy --manifest-path $env:MANIFEST --all-targets --features libmpv -- -D warnings
+      - name: Tests (with the player)
+        run: cargo test --manifest-path $env:MANIFEST --features libmpv
+      - name: Build
+        run: cargo build --manifest-path $env:MANIFEST --features libmpv
+
+      - name: Smoke test (D3D11 WARP)
+        working-directory: apps/desktop
+        run: node scripts/playback-smoke.mjs "$env:RUNNER_TEMP\smoke"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-windows
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore

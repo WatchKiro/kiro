@@ -1,0 +1,23 @@
+{
+  "name": "@kiro/utils",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Small, framework-independent utilities shared across Kiro.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@kiro/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.12.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3"
+  }
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-paused"
+description = "Enables the player_set_paused command without any pre-configured scope."
+commands.allow = ["player_set_paused"]
+
+[[permission]]
+identifier = "deny-player-set-paused"
+description = "Denies the player_set_paused command without any pre-configured scope."
+commands.deny = ["player_set_paused"]

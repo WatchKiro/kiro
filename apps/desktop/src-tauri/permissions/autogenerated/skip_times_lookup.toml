@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-skip-times-lookup"
+description = "Enables the skip_times_lookup command without any pre-configured scope."
+commands.allow = ["skip_times_lookup"]
+
+[[permission]]
+identifier = "deny-skip-times-lookup"
+description = "Denies the skip_times_lookup command without any pre-configured scope."
+commands.deny = ["skip_times_lookup"]

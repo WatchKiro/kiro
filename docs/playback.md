@@ -1,0 +1,292 @@
+# Native playback (libmpv)
+
+Kiro plays video with libmpv, drawn by a native layer **under** the transparent webview, with the React controls composited on top. This page describes the player as built. For how the approach was chosen, the measurements and the licensing questions, see the original [libmpv spike](spikes/libmpv.md).
+
+Status: macOS, Windows and Linux, behind the `libmpv` Cargo feature (build.rs sets the `native_player` cfg that gates it). `pnpm dev` / `pnpm dev:desktop` turn it on automatically when libmpv is found (`KIRO_MPV=0` opts out; `pnpm --filter @kiro/desktop dev:mpv` forces it):
+
+- **macOS:** `brew install mpv`.
+- **Linux:** the distribution's mpv development package (`libmpv-dev` on Debian and Ubuntu, `mpv-devel` on Fedora, `mpv` on Arch), found with pkg-config. libmpv 0.35 and newer.
+- **Windows:** an mpv-dev package (e.g. `mpv-dev-x86_64-*.7z` from [shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases)) extracted somewhere, with `KIRO_LIBMPV_DIR` set to the folder holding `libmpv-2.dll`. The DLL is imported directly (`raw-dylib`), so no import library is needed, and build.rs copies it next to the executable. shinchiro's builds are GPL, so they're for development and CI only; to develop against the LGPL DLL that releases ship, point `KIRO_LIBMPV_DIR` at `apps/desktop/.libmpv-windows/dist/bin` (docs/releasing.md).
+
+Builds without the feature have no player commands; the player page says so. Release builds bundle an LGPL libmpv on macOS and Windows (docs/releasing.md).
+
+## Layers
+
+```
+React  PlayerPage ── useNativePlayer ── NativePlayer (MediaPlayer from @kiro/player-core)
+                                              │ PlayerBridge: invoke(...) + Channel<PlayerEvent>
+Rust   commands/player.rs ── PlayerState { Arc<MpvPlayer> }
+         media/mpv/mod.rs      MpvPlayer: owns Arc<Mpv>, event thread, video surface
+         media/mpv/events.rs   mpv event loop → media/model.rs (PlayerModel) → events
+         media/mpv/macos.rs    KiroVideoView + KiroVideoLayer (CAOpenGLLayer) under the WKWebView
+         media/mpv/win32.rs    KiroVideo window (mpv's `wid`) under the WebView2 browser window
+         media/mpv/linux.rs    GtkGLArea in a GtkOverlay under the WebKitGTK webview
+         media/mpv/client.rs   Safe wrapper over libmpv's client API (core, properties, events)
+         media/mpv/render.rs   Safe wrapper over the OpenGL render API (macOS, Linux)
+         media/mpv/ffi.rs      Hand-written declarations from mpv's ISC-licensed headers
+```
+
+| Where                                                     | What                                                                                                |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `src-tauri/src/media/model.rs`                            | Backend-independent state machine and event types. Built and tested in every configuration.         |
+| `src-tauri/src/media/mod.rs`                              | `PlaybackBackend` (mirrors `MediaPlayer`) and input validation (stream URLs, track ids, subtitles). |
+| `src-tauri/src/media/mpv/`                                | The libmpv backend (feature-gated), with its own bindings to libmpv's C API.                        |
+| `src-tauri/src/commands/player.rs`                        | Tauri commands, granted by `capabilities/player.json`.                                              |
+| `src/services/player.ts`                                  | `PlayerBridge`: typed command wrappers and the event channel.                                       |
+| `src/features/playback/native-player.ts`                  | `NativePlayer implements MediaPlayer`.                                                              |
+| `src/features/playback/player-page.tsx`, `track-menu.tsx` | Player UI, including the audio and subtitle pickers.                                                |
+
+## Lifecycle
+
+- **Attach** (`player_attach`, async). Creates mpv, starts its event thread and inserts the video view below the webview on the main thread. Returns a `PlayerSnapshot` (state, position, tracks, selection, volume) so the renderer starts from the truth. If a player is already attached (for example after a webview reload) it reconnects: the event channel is replaced and the snapshot returned.
+- **Detach** (`player_detach`, async). Stops playback, removes the view and restores the webview's opaque background on the main thread, then releases everything. Leaving the player page detaches; coming back attaches a fresh mpv.
+- **Teardown order** (`MpvPlayer::drop`), with no `Box::leak` anywhere:
+  1. Empty the layer's render slot, so no further draw renders, then free mpv's render context **with the CGL context it was created in made current** (`GlRenderer::drop`). `RenderContext::drop` clears mpv's update callback first, then frees the context, then releases what the callback wrote to. libmpv calls the callback under the same lock that clearing it takes, so no call can be in flight once it is cleared.
+  2. Stop the event thread (`mpv_wakeup`) and join it.
+  3. Drop the last `Arc<Mpv>`, which destroys the core.
+- **Ordering.** Attach and detach are serialised in Rust and idempotent. `NativePlayer.attach()` returns at once and queues the attach; `destroy()` queues the detach behind it. React StrictMode's mount → unmount → mount therefore reaches Rust as attach → detach → attach, never attach → attach → detach.
+- **Locks.** Core Animation holds the CGL context lock around draws, and draws take the render-slot mutex. Teardown takes the slot only to empty it, and takes the CGL lock afterwards, so the lock order is always CGL → slot.
+- **GL context changes.** If Core Animation hands the layer a different CGL context (for example after a GPU switch), the renderer is freed in the old context and recreated in the new one on the next draw.
+
+## Events, not polling
+
+The event thread observes `idle-active`, `pause`, `eof-reached`, `time-pos`, `duration`, `paused-for-cache`, `cache-buffering-state`, `track-list` and `chapter-list` (as JSON), `volume`, `mute`, `sub-delay`, `audio-delay` and `speed`, plus `start-file`, `file-loaded`, `playback-restart` and failed `end-file`. Each becomes a `Change` for `PlayerModel`, which returns events shaped exactly like `PlayerEventMap`:
+
+```json
+{ "event": "trackSelect", "payload": { "kind": "subtitle", "trackId": "2" } }
+```
+
+Events go to the attached webview over a Tauri `Channel` passed to `player_attach`, not global events, so no `core:event` permission is needed and only the player page receives them. `NativePlayer` re-emits them through its `on()` and keeps a view for `useSyncExternalStore`.
+
+- **State.** `error` → `loading` → `idle` (also until a file is actually loaded: mpv may leave idle before announcing it) → `ended` → `paused` → `playing`, in that priority.
+- **Time.** `timeUpdate` is throttled to every 250 ms during playback and sent immediately on seek, pause, load and duration changes.
+- **End.** mpv runs with `keep-open`, so the last frame stays up and `ended` fires on `eof-reached`. mpv reports `pause` just before `eof-reached`, so a brief `paused` precedes `ended`. `NativePlayer.play()` after the end seeks to 0 first.
+- **Delays and speed.** `sub-delay`, `audio-delay` and `speed` become one `timingChange` event, `{ subtitleDelay, audioDelay, speed }` (to the millisecond), which only the native player has: it isn't part of `PlayerEventMap`, and `NativePlayer` keeps it in its view without re-emitting it.
+- **Errors.** A failed `end-file` becomes an `error` event (`NETWORK` and `UNKNOWN` are marked recoverable, so expired debrid links can be retried) and the `error` state, which holds until the next load.
+
+The only remaining periodic read is the stats overlay (`player_stats`, once a second while it is open): decoder and renderer details are not part of the event stream.
+
+## Tracks
+
+- `track-list` is parsed into `MediaTrack`s: embedded MKV tracks, HLS renditions and external files. mpv's ids are unique per kind, so audio 1 and subtitle 1 can both exist. Cover art is skipped.
+- `player_select_audio_track(id)` and `player_select_subtitle_track(id | null)` validate the id's shape and check that the track exists before setting `aid` / `sid`.
+- `player_add_subtitle(url, label?, language?)` accepts **https only**, a printable label of up to 200 characters and a BCP 47-shaped language tag. mpv downloads the file before the command returns, so the command is async. Arguments go to `mpv_command` as an array, so they cannot inject commands. The new track is selected and returned.
+- `MediaSource.externalSubtitles` passed to `NativePlayer.load()` are added once the file has loaded. Failures are reported as recoverable `error` events.
+- The UI has an **Audio** menu and a **Subtitles** menu (Off, each track, and "Add a subtitle file"). Labels come from the track title or the language's English name, with codec, channel layout, Forced and External as details (`track-labels.ts`).
+
+## Library progress
+
+For streams opened from a title page (`PlaybackRequest.media`), the player page feeds `usePlaybackLibrary` (`features/library/`) with samples derived from `NativePlayer`'s view. A new sample is made only when the state changes or a throttled `timeUpdate` arrives, so progress saving is event-driven. `ProgressTracker` saves:
+
+- every 10 s while playing;
+- on pause;
+- at the end (`ended` within 30 s of the end saves the title as finished);
+- when leaving the player.
+
+Resuming follows **Settings → Playback → Resume playback**: _Resume_ (the default) starts at the saved position through `loadfile`'s start position and shows a "Resumed from mm:ss · Start over" notice; _Ask_ holds the stream back and asks "Resume from mm:ss?" (Resume has focus) before loading; _Start over_ always starts at 0. Progress is saved in every mode.
+
+**Mark as watched at** (70–98 %, default 90 %) decides when progress counts as finished, which takes it off Continue watching. The core works the flag out as it saves progress (`library_record_progress` reads the setting and clamps it; `Library::record_progress_at`), and stores it, so a change applies to progress saved from then on and never rewrites history: a film already marked watched stays watched, and one at 85 % when the threshold drops to 80 % is marked the next time it is played. Stopping within 30 s of the end still counts as the end.
+
+## Choosing a stream
+
+A title page's **Play** (and **Resume S2 E4**, and Discover's Play) starts the best stream without showing the list. It waits until every stream addon has answered, so a slower addon with a better stream still counts.
+
+- `parseStreamQuality` (`@kiro/addon-sdk`) reads resolution, HDR / Dolby Vision, codec, source (remux, BluRay, WEB, cam…), Atmos and channels, size, languages and the debrid **cached** marker (`[TB+]`, ⚡, "cached", "instant"; `[TB download]`, ⏳, "uncached" mean not cached) from the stream's free-form `name`, `description`, `title` and `behaviorHints`. Anything it doesn't recognise is left out.
+- `rankStreams` (`features/title/stream-ranking.ts`) keeps only what `classifyStream` can play (https) and orders it: cached first (unmarked streams, such as direct links, count as ready but come after cached ones), no cams, a language from Settings → Playback's audio languages (the system's language when none are set), the highest resolution up to the preferred maximum, HDR (or SDR), a sensible size for the resolution, then source, audio, codec and size. Remaining ties keep addon order, then the addon's own order.
+- The preferences (maximum resolution, prefer HDR, prefer cached) are in **Settings → Streams**, stored by the core in `settings.json` with the playback settings (the `streams` section). Play waits for them to load.
+- The same section's filters (`filterReasons`) leave out cam, telesync and screener releases, files over a maximum size (an unknown size passes), codecs to avoid (AV1, HEVC) and streams naming an excluded keyword as a whole word (ignoring case; a space also matches `.`, `-` and `_`). Filtered streams are ranked like the rest but kept in `StreamRanking.filtered`: Play and Up next never pick them, and the stream list shows them folded away with the reasons and a Play button, so nothing silently disappears.
+- Only enabled addons are queried, in the order set in **Settings → Addons** (`addons.json` keeps the order and an `enabled` flag; version 1 files read as all enabled, in install order). That order is the ranking's tie-break and the order of the addon chips.
+- The request is built like the stream list's (`streamPlaybackRequest`), so it carries the addon and binge group for Up next. The chosen stream is named on the opening screen (`PlaybackRequest.streamLabel`). When nothing can play, Play shows the stream list with a message instead. **Choose stream** always opens the list, sorted by the same ranking, with the best one marked.
+
+## Windows and Linux surfaces
+
+Each platform module has the same shape (`media/mpv/mod.rs`): `VideoSurface::prepare` runs before mpv exists, `Prepared::configure` sets mpv's video output options, then `attach`, `detach` and `release_renderer`. Everything else, from the commands to the event thread, is shared.
+
+**Windows** (`win32.rs`). mpv's own window embedding, as Stremio's Windows shell does it:
+
+```text
+Tauri window
+└── WRY_WEBVIEW              ← wry's host window for the WebView2 controller
+    ├── Chrome_WidgetWin_*   ← the browser, transparent while the player is open
+    └── KiroVideo            ← ours, at the bottom; disabled, so it never takes input
+        └── mpv's window     ← created by mpv (`wid`), drawn with D3D11
+```
+
+- `prepare` creates `KiroVideo` inside WebView2's host window (`ICoreWebView2Controller::ParentWindow`) at the bottom of the z-order, before mpv starts, so its handle can be passed as `wid` (with `vo=gpu-next,gpu`, `force-window=no`, `input-cursor=no`, `cursor-autohide=no`). mpv then owns presentation and hardware decoding (`d3d11va`).
+- `attach` makes WebView2's background transparent (`ICoreWebView2Controller2::SetDefaultBackgroundColor`, alpha 0) and remembers the old colour; `detach` restores it and hides `KiroVideo`.
+- A window subclass on the host keeps `KiroVideo` its size (`WM_SIZE`); mpv follows `KiroVideo`.
+- Teardown: `KiroVideo` is destroyed after mpv (the surface is dropped after the core). Window calls must run on the main thread, so dropping posts a private message (`RegisterWindowMessageW("KiroVideoRelease")`) to the host, which our subclass handles: it destroys the named `KiroVideo` (after checking it is ours) and removes the subclass.
+- Common Controls 6 (window subclassing) needs an application manifest. tauri-build only embeds it in the app executable, so build.rs embeds `windows-app-manifest.xml` through the linker instead, which also lets `cargo test` binaries start.
+
+**Linux** (`linux.rs`). mpv's OpenGL render API into a `GtkGLArea` beneath the webview, the way GTK mpv front ends (Celluloid) render. mpv's window embedding only works on X11 and would cover the GTK-drawn webview; Wayland has none.
+
+```text
+GtkApplicationWindow (RGBA visual)
+└── GtkBox (Tauri's default_vbox)
+    └── GtkOverlay "kiro-video-overlay"   ← put where the webview was, the first time
+        ├── GtkBox (main child)
+        │   └── GtkGLArea                 ← mpv renders here while attached
+        └── WebKitWebView (overlay)       ← transparent background while attached
+```
+
+- The first attach moves the webview into a `GtkOverlay` in the same place in Tauri's box (keeping its packing) and keeps it there. Each attach adds a `GtkGLArea` under it and makes the webview's background transparent; detach removes the area and restores the background.
+- **The window needs an RGBA visual** (`tauri.linux.conf.json`: `"transparent": true`, Linux only). Without it WebKitGTK's transparent pixels come out opaque black, whatever is beneath them. tao still paints the window's `backgroundColor`, so there is no see-through flash at startup, and the page's own background covers everything outside the player.
+- mpv's render context is created when the area is realized (its GL context current), rendered in the area's `render` signal into the framebuffer GTK binds, and freed with the context current again (on unrealize, or `release_renderer`, which hops to the main thread). GL functions come from EGL on Wayland and GLX on X11, looked up with `dlopen` so nothing links against libGL.
+- After each frame the area's framebuffer is bound again for reading and drawing: mpv leaves its own bound for reading, and GTK reads the area's pixels back from whatever is bound when it composites without GL (as under Xvfb), which gave a black video.
+- **Redraws are driven by mpv's update callback**, not the frame clock: the callback (on mpv's render thread) wakes the GTK main loop (`MainContext::invoke`, at most one in flight), which calls `queue_render`. A frame-clock tick callback never fired under Xvfb, and whether it ticks depends on the window manager and compositor.
+- GTK objects are only touched on the main thread; the surface holds them in a cell that leaks rather than drops them on another thread (glib's `ThreadGuard` would panic, and release builds abort on panic).
+- Older libmpv (Linux distributions ship 0.35 to 0.37) lacks `sub-border-style` and names `sub-outline-size` / `sub-outline-color` `sub-border-size` / `sub-border-color`; `set_subtitle_style` falls back to those and skips the background box.
+- Hardware decoding: GDK's Wayland or X11 display is passed to mpv's render context (`MPV_RENDER_PARAM_WL_DISPLAY` / `MPV_RENDER_PARAM_X11_DISPLAY`). On Wayland that gives zero-copy VA-API; on X11 (GLX, and no X11 VA-API in the LGPL build) mpv uses `vaapi-copy`. See [releasing](releasing.md#hardware-decoding).
+- **Software OpenGL** (Mesa's llvmpipe, softpipe or swrast: VMs, CI, no working driver): mpv's single-pass renderer (`gpu-dumb-mode`). It is far cheaper on the CPU, and mpv's full renderer intermittently drew only black there: about half of CI's runs, also with Ubuntu's libmpv and in the dev smoke test. The single-pass renderer, or Mesa limited to OpenGL 3.3, never did; the exact cause isn't pinned down.
+
+## Retina and display changes
+
+`KiroVideoView` is a layer-hosting `NSView` subclass. On `viewDidMoveToWindow` and `viewDidChangeBackingProperties` (the window moved to a display with a different scale, or the display's resolution changed) it sets the layer's `contentsScale` to the window's `backingScaleFactor` and redraws at the new pixel size. With `KIRO_SPIKE_LOG=1` this logs `contentsScale 1 -> 2`, and the stats overlay shows the current scale.
+
+## Fullscreen
+
+**F**, double-clicking the video (not a control) or the control bar's button toggles fullscreen; **Escape** leaves it (unless it is closing the tracks panel). It is the window's native fullscreen (on macOS in its own Space), through Tauri's window API: the `player` capability grants only `core:window:allow-set-fullscreen` and `core:window:allow-is-fullscreen`. The renderer re-reads the state after each window resize, so leaving another way (the green button, the View menu) is picked up, and leaving the player leaves fullscreen.
+
+`KiroVideoView` has an autoresizing mask, so it follows the window's content view, and `canDrawInCGLContext` redraws whenever the layer's pixel size differs from the last frame's. With `KIRO_SPIKE_LOG=1` each size change logs `resized 2560x1600 -> 2880x1800`. F, Escape and H don't wake the auto-hidden controls.
+
+## Preferred languages
+
+Settings → Playback holds ordered audio and subtitle languages and "Subtitles off by default", stored by the core in `settings.json` in the config directory (`src-tauri/src/settings`, commands `settings_get` / `settings_set`). They live in the core rather than `localStorage` because the renderer's origin differs between the dev server's port and release builds, and so they are validated at the boundary like other stored input.
+
+When a stream's first track list arrives after `loading`, the player applies `chooseTracks` (`features/playback/track-preferences.ts`): languages are compared by `languageCode` (`eng`, `en`, `en-US` → `en`); audio takes the first preferred language the stream has, avoiding commentary tracks; subtitles take full subtitles before SDH and forced ones, unless **Settings → Subtitles → Preferred type** puts SDH or forced ones first; "off" keeps only forced subtitles in the audio's language. Without a match the stream's default stays. Changes go through `selectAudioTrack` / `selectSubtitleTrack`, so they show in the log.
+
+## Up next
+
+For a series episode opened from a title page, `PlaybackRequest.source` records the addon and the stream's `behaviorHints.bingeGroup`. In the last 30 s (the library's end margin), or at the end, a card offers the next episode (`episodeAfter`, using the title's metadata) with a countdown (10 s by default; **Settings → Playback → Up next countdown**) that pauses with playback. With **Autoplay next episode** off the card only offers Play now; Cancel hides it until playback moves back from the end, and the control bar has a Next episode button. When the countdown ends the player fetches the next episode's streams from the same addon and plays the first playable one with the same binge group (Stremio's convention), replacing the history entry so Back returns to the title. Without a binge group or a match, it plays the next episode's best-ranked stream from any addon (see Choosing a stream), and only opens that episode's stream list when nothing can play.
+
+Each stream gets its own `PlaybackSession` (keyed by the history entry), so the previous episode's progress is flushed and the next one's is looked up. A session ignores the player's state until its own stream starts loading, and progress isn't sampled while loading, since the position can still be the previous stream's.
+
+## Skip intro and credits
+
+`chapter-list` becomes `chaptersChange` (and the snapshot's `chapters`): start times and titles, sorted. Titles are the file's own metadata, so the core treats them as untrusted: control characters dropped, whitespace collapsed, at most 120 characters, at most 256 chapters, and a list over 256 KiB is ignored.
+
+`features/playback/chapter-skip.ts` decides what can be skipped, conservatively:
+
+- A title has to name the part outright, in English or another common release language: `Intro`, `OP`, `Opening Credits`, `Recap`, `Previously on…`, `Credits`, `End Credits`, `ED`, `Outro`, `Preview`, `Vorspann`, `Générique de fin`, `オープニング` and so on. Numbering (`02. Opening`, `OP2`) and a song name after a separator (`Opening: …`) are allowed. `Opening Night`, `Post-credits scene`, `Prologue` or `Cold Open` don't count.
+- Neighbouring chapters on the same side are one part: a recap then the intro, or the credits then a preview.
+- A part ends where the next chapter starts. Intros and recaps must start in the first half and be at most 5 minutes (and a quarter of the video); credits must start in the second half and be at most 20 minutes (and 40 %). Parts under 5 s, files without a duration and files with one chapter get nothing.
+
+While playback is in a part, **Skip intro** (or recap, credits, preview) shows above the controls and seeks to its end; `S` does the same. The button is on screen for 6 s after the part starts even when the controls are hidden, and whenever they show. It is drawn after the controls with `z-10`, like the Up next card, so it sits above their gradient and stays clickable, and it steps aside while the tracks panel is open.
+
+When the credits run to the end of the file, Up next treats their start as the end (`isNearEnd`'s `creditsFrom`), so the card and countdown come early and take the button's place (with Settings' autoplay switch and countdown length applying as usual). When something follows them (a post-credits scene), only Skip credits shows. Cancelling Up next brings Skip credits back.
+
+**Seeing what a file offers.** Most streaming releases have no chapters, or only numbered ones (`Chapter 1`), so their chapters name nothing; see below for looking times up instead. The seek bar shows a small gap at each chapter start and tints the parts that can be skipped (intro, credits, from chapters or looked up), so a plain bar means there is nothing to go on. **Stats** (top right of the player) has a `chapters` row: `none in this file`, `12 chapters · no intro or credits named`, or the parts found, e.g. `4 chapters · intro 0:00–0:50, credits 3:20–4:00`. With a lookup it names the source: `no chapters · intro 1:13–1:30, credits 46:40–47:33 (SkipDB)`, with how far off the recorded release was when the parts were trimmed for it (`6 chapters · intro 3:02–3:13, credits 20:15–20:32 (SkipDB, 10 s longer cut)`), or `looking up on SkipDB`, `nothing on SkipDB`, `SkipDB unavailable`. When SkipDB only has another release it says how long that file was, e.g. `6 chapters · SkipDB has a 22:48 cut (this file 22:13)` (or `SkipDB has other releases only` when it recorded no length).
+
+Settings → Playback → **Skip intros automatically** (`skipIntros`, off by default) skips intros and recaps as playback reaches them (from chapters or looked up), once each per stream, and shows "Skipped intro" with **Watch intro** to go back. Credits are never skipped automatically.
+
+### Looking times up online
+
+Settings → Playback → **Look up intro times online** (`onlineSkipTimes`, off by default) fills in for files whose chapters mark nothing, from [SkipDB](https://skipdb.tv): crowd-sourced intro, recap, credits and preview times keyed by IMDb id, season and episode.
+
+- **When.** The stream is a regular episode with an IMDb id (`PlaybackRequest.media`: the video id `tt0903747:2:4`, or the title id with the season and episode; specials, season 0, and other catalogues' ids are not looked up), the file has loaded (it is playing, so its chapters and duration are known) and `skipSegments` found nothing in its chapters. **Chapter-derived parts always win**: if the chapters mark any part, nothing is sent. One lookup per stream, with the duration first reported; it runs in the background, so playback never waits, and a failure only means no button.
+- **Release match.** The same episode is cut differently by different releases (a service's logo, a longer recap), typically by a few seconds, so times recorded on one file are not simply right for another. Kiro sends the file's duration and asks for the times as recorded (`adjust=none`). For each segment SkipDB reports `offset_ms`: this file's length minus the recorded file's. Its `match` label depends on the `adjust` mode (with `none`, 13 s off is `exact`), so only the offset is relied on:
+  - Within 15 s (SkipDB's own limit for shifting), the segment is used, **trimmed to what is the part whether the difference is before it or after it**: from `start + max(0, offset)` to `end + min(0, offset)`. Skipping then never skips any of the episode; at worst a few seconds of the theme still play. A part shorter than 5 s once trimmed is left out, as for chapters. For example, The Big Bang Theory S11E1 recorded as 2:52–3:13 on a file 10 s shorter than the one playing becomes 3:02–3:13.
+  - Further off, or with no length recorded (`agnostic`), it is not used, and is counted (`unmatched`). Where the other file's length is known (this file's duration minus `offset_ms`) it is reported (`otherLengths`) for the Stats row: The Big Bang Theory S1E1 has one recording, on a 22:48 file, so a 22:13 release gets nothing.
+  - In practice exact lengths are rare: of 12 episodes from real streams, none was within 2 s of SkipDB's recording, 8 were 6–13 s off (and get Skip intro this way), and 4 weren't on SkipDB.
+- **The core** (`skip_times`, command `skip_times_lookup`, granted by the `player` capability) refuses unless the setting is on, then validates the arguments (`tt` and 7–10 digits, season 1–999, episode 1–9999, a duration up to 6 h) and asks `https://skipdb.tv/api/segments?imdb_id=…&season=…&episode=…&duration=…&adjust=none` through the addon transport's `fetch_json`: `AddonUrl` policy (https, redirects re-checked), its own tighter limits (5 s connect, 8 s total, 64 KiB, 2 redirects). The response is untrusted: anything that doesn't parse is dropped, a shift SkipDB made anyway (`adjusted`) is undone before trimming, and a segment must end after it starts, start no more than 2 s before 0 and end no more than 2 s after the duration (then clamped to the file). Results, including "nothing", are cached in memory per episode and file length (256 entries, oldest dropped); failures are not cached. Nothing is written to disk.
+- **The renderer** (`online-skip.ts`, `use-skip-parts.ts`) checks the command's result again (`parseSkipTimes`), then holds the parts to the chapter rules (`externalSkipSegments`: sorted, overlapping or touching parts on the same side joined, `isPlausible` for the halves and lengths) and passes them to the same pipeline as chapters: the button, automatic skipping, the seek-bar tint and Up next's `creditsFrom`.
+- **Why off by default.** It sends the show's IMDb id, the season and episode number and the file's duration to a third party (with the user's IP address) for each episode watched, which amounts to a viewing history. Kiro is local-first and sends nothing about what is watched otherwise, so this is the user's choice to make. The setting's description says what is sent and to whom.
+- **Licence.** SkipDB's data is ODbL 1.0 (© SkipDB contributors). Kiro only displays it and keeps no copy, which its "Service Provider Reciprocity" term exempts; the attribution is in the setting's description and the Stats row names the source.
+- **Why SkipDB.** Of the services checked, it is the only one keyed by IMDb id that ties times to a release's length. IntroDB (IMDb ids) stores no durations; TheIntroDB (TMDB ids) takes a duration but doesn't return one, allows 500 lookups a day per IP without a key and forbids caching beyond a session; AniSkip returns durations but covers anime only, keyed by MyAnimeList ids, and mapping IMDb seasons to those is ambiguous (split seasons, absolute numbering) in a way the duration check can't catch, as episodes of a show are near-identical in length.
+
+## Subtitle look
+
+**Settings → Subtitles** sets the size (50–200 %), text colour (`#rrggbb`), edge (outline, drop shadow or a background box) and how far subtitles are raised (0–40 % of the picture's height), with a live preview. The player page sends them with `player_set_subtitle_style` (`player` capability) once the player is attached and whenever they change; the core validates them (`media::SubtitleStyle`) and sets `sub-scale`, `sub-color`, `sub-border-style`, `sub-outline-size`, `sub-outline-color`, `sub-shadow-offset`, `sub-back-color` and `sub-pos`. mpv keeps them for later files. Styled (ASS) subtitles keep their own look apart from the size (`sub-ass-override=scale`, mpv's default). With `KIRO_SPIKE_LOG=1` each property is logged with the value mpv reports back, e.g. `sub-color = #FFFFE45C (set #ffe45c)`.
+
+The same page restores the remembered volume (**Remember volume**, saved 0.8 s after the viewer settles on one) once per attachment, and ←/→ and the skip buttons jump by **Skip interval** (5, 10, 15 or 30 s).
+
+## Sync and speed
+
+Addon subtitles are often a little early or late, so the control bar has a **Sync and speed** panel beside **Subtitles and audio** (`timing-menu.tsx`): subtitle delay and audio delay in 0.1 s steps, each with a reset, and the speeds 0.5×, 0.75×, 1×, 1.25×, 1.5× and 2×. Z and X move the subtitles 0.1 s earlier or later, J and K the audio, and [ and ] step through the speeds, from anywhere in the player (listed in the `?` overlay). Each change shows a brief notice over the video, e.g. `Subtitles +0.3 s` or `Speed 1.5×`, and the button shows the speed when it isn't 1×. With subtitles off, the subtitle row is disabled and Z/X say to turn them on. The panel works with the keys and a remote like the tracks panel (`ControlPopover` in `track-menu.tsx`): opened with Enter, focus starts on the subtitle delay's − (the audio delay's when subtitles are off), arrows stay inside and Escape returns to the button.
+
+- **Commands.** `player_set_subtitle_delay(seconds)` (mpv `sub-delay`, positive shows subtitles later), `player_set_audio_delay(seconds)` (`audio-delay`, positive plays the audio later) and `player_set_speed(speed)` (`speed`), granted by the `player` capability. Non-numbers are refused (`INVALID_ARGUMENT`); out-of-range values are clamped to ±60 s, ±10 s and 0.25–4× (`media::subtitle_delay`, `audio_delay`, `playback_speed`). The snapshot carries `subtitleDelay`, `audioDelay` and `speed`, and `timingChange` keeps the UI in step with what mpv reports.
+- **What is remembered** (`use-player-timing.ts`, logic in `timing.ts`). mpv keeps all three from one file to the next, so the renderer sets them for each stream rather than relying on mpv. Within one stream (one `PlaybackSession`), the subtitle delay is remembered **per subtitle track**: seeking, turning subtitles off and on, or trying another track and coming back keeps the fix for that track, and a track not yet adjusted starts at 0. The audio delay is one per stream. A new stream (the next episode, another source) starts both at 0. The speed is kept for the rest of the app's run, so the next episode plays at the chosen speed, but it isn't saved. Nothing is added to Settings.
+- **Preview.** The browser preview's fake player takes the same commands, reports them with `timingChange`, runs its clock at the chosen speed and says on its caption how far the subtitles are shifted.
+
+## Keeping the screen on
+
+mpv stops the screensaver itself (`stop-screensaver`) only when it has its own video window. With the render API (`vo=libmpv`) it can't, so the player holds the system's "keep the display awake" assertion while the state is `playing` (which stays `playing` through mid-playback buffering): an IOPMAssertion `PreventUserIdleDisplaySleep` named "Kiro is playing video" on macOS, and `org.freedesktop.ScreenSaver.Inhibit` over D-Bus on Linux, both through the [`keepawake`](https://crates.io/crates/keepawake) crate (pinned, optional under the `libmpv` feature). Windows doesn't need it: mpv owns the video window there and stops the screensaver itself, so the player uses a wakelock that holds nothing (`keep_awake::NoWakelock`).
+
+`media::keep_awake::KeepAwake` follows the player model: the event thread syncs it after every change it applies, so it can't disagree with what the renderer is told. Pause, `ended`, `error`, idle (`stop`, detach) and turning the setting off release it; dropping the player and quitting the app (`RunEvent::Exit`) release it for good. A failed acquire (no screensaver service on the session bus, say) is logged and tried again the next time playback starts, not on every event.
+
+**Settings → Playback → Keep the screen on while playing** (on by default) turns it off. The core applies it itself: on `player_attach` and straight away from `settings_set`, which also sets mpv's `stop-screensaver` to match for the platforms where mpv has its own window. With `KIRO_SPIKE_LOG=1` each change logs `keep awake: Held (Playing)` or `keep awake: Released (Paused)`, and the setting logs `keep screen on: true (stop-screensaver = yes)` with the value mpv reports back. Check it with `pmset -g assertions` (macOS) or `gnome-session-inhibit --list` (GNOME).
+
+## Discord Rich Presence
+
+Settings → General → **Show what I’m watching on Discord** (`general.discordPresence`, off by default) shows the video on the user's Discord profile while it plays: a "Watching" activity with the title, the episode (`S2 E4`), the poster and the time elapsed (with a progress bar when the length is known), and "Paused" while paused. The member list reads "Watching Breaking Bad". Two options below it: **Show the title** (off: "Watching something on Kiro" with the Kiro logo, no episode or poster) and **Show the episode**.
+
+- **What is sent.** Only `presence::NowPlaying`: the title, the season and episode numbers, and the poster if it is an https URL of at most 256 bytes with no credentials in it (otherwise the application's `kiro` art asset). The renderer builds it from the playback request's library details (`nowPlayingFor` in `playback-request.ts`), never from the stream URL, its addon, the file name or the request's subtitle line (which names the addon), and `player_set_now_playing` accepts no other fields. Plus the start and end timestamps (Unix ms) while playing. No buttons, party or secrets.
+- **Nothing while off.** The presence thread starts the first time the setting is on (read on `player_attach`, applied straight away from `settings_set`), and only then connects. Turning it off clears the activity and disconnects; turning the title or episode off updates it at once.
+- **Following the player.** As with keeping the screen on, the event thread hands the player's state to `presence::Presence` after every change it applies. `playing` (including buffering mid-way) shows the activity with `start = now − position`; `paused` shows "Paused" without a time; `loading`, `ended`, `error`, idle and closing the player clear it. Playing on doesn't count as a change (the start drifts by less than 3 s); seeking does.
+- **Discord not running.** `presence::worker` talks to Discord on its own thread, never the player's: it connects over the local IPC socket (`discord-ipc-N` in the temporary directory on macOS and Linux, a named pipe on Windows) through the [`discord-rich-presence`](https://crates.io/crates/discord-rich-presence) crate (MIT, pinned at 1.1.0), only while there is something to show. A failed connection is retried after 5 s, then 10, 20, 40 and every 60 s, until it works or there's nothing to show; Discord quitting mid-way is noticed on the next update and handled the same way. Updates stay within Discord's 5 per 20 s, merging changes made meanwhile. An update Discord refuses isn't retried. It logs nothing unless `KIRO_SPIKE_LOG=1`.
+- **Quitting.** `RunEvent::Exit` clears the activity and disconnects, waiting at most 0.5 s for Discord (which also clears it when the connection closes).
+- **The Discord application.** The activity belongs to a Discord application whose name ("Kiro") Discord shows and whose art assets hold the logo. Its ID is a build-time constant, `presence::APPLICATION_ID`, set with `KIRO_DISCORD_APPLICATION_ID` when building. **Until it is set the ID is a placeholder, presence never starts, and Settings says it's not available in this build** (`AppInfo.discordPresence`). To set it up: create an application named "Kiro" in the [Discord Developer Portal](https://discord.com/developers/applications), upload `apps/desktop/app-icon.png` under Rich Presence → Art Assets with the name `kiro`, then build with `KIRO_DISCORD_APPLICATION_ID=<its Application ID>` (or put the ID in `src-tauri/src/presence/mod.rs`).
+
+## Other mpv settings
+
+`config=no`, `load-scripts=no`, `ytdl=no` and no default key bindings, so behaviour doesn't depend on the user's mpv setup. Also `hwdec=auto-safe` (VideoToolbox; VA-API on Linux, see [releasing](releasing.md#hardware-decoding)), `keep-open=yes`, `volume-max=130` (the UI's 0–1.3 range comes from the snapshot's `maxVolume`), `sub-auto=no` and `audio-client-name=Kiro`. `loadfile` passes `start=<seconds>` for `MediaSource.startPosition`.
+
+## Debug tooling (development only)
+
+| Variable                              | Effect                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KIRO_SPIKE_LOG=1`                    | Rust logs every player command with its outcome, every event except `timeUpdate`, mpv stats every 2 s, GL state and sampled pixels for early frames, `contentsScale` changes, layer resizes, display assertion changes (`keep awake: …`), and teardown (`render context freed`, `player released`).           |
+| `KIRO_MPV_OPTIONS='name=value ...'`   | With `KIRO_SPIKE_LOG=1`: extra mpv options, space-separated, set before mpv starts (e.g. `msg-level=all=v gpu-dumb-mode=yes`), to try settings without a rebuild.                                                                                                                                             |
+| `VITE_KIRO_SPIKE_AUTOPLAY=<url>`      | Opens `/player` on launch and plays `<url>`.                                                                                                                                                                                                                                                                  |
+| `VITE_KIRO_SPIKE_EXERCISE=1`          | Scripted run once playback starts: switch audio, try a missing track, switch and disable subtitles, add an https subtitle, try an http one, seek, pause, resume, volume, mute, then leave and re-enter the player (detach and re-attach) and leave again. Expects at least two audio and two subtitle tracks. |
+| `VITE_KIRO_SPIKE_EXERCISE=fullscreen` | Enters fullscreen 2 s after playback starts, leaves it 5 s later, then leaves the player. With `KIRO_SPIKE_LOG=1` the video layer logs each resize.                                                                                                                                                           |
+| `VITE_KIRO_SPIKE_EXERCISE=chapters`   | Clicks Skip intro once it shows, seeks to just before the last chapter, resumes playback and clicks Skip credits, then leaves. For a file whose chapters mark both.                                                                                                                                           |
+| `VITE_KIRO_SPIKE_EXERCISE=timing`     | Presses the player's keys on `test5.mkv`: plays a stretch at 1× and one at 1.5× (`]`), logging the position after each as a seek to where it paused; pauses at 13.5 s and shows the subtitles 2 s later (`X` × 20), then back (`Z`); delays the audio (`K`); slows to 0.75× (`[`) and leaves.                 |
+| `VITE_KIRO_SPIKE_EXERCISE=sources`    | Loads a 404 URL (error), the HLS test stream, then `test5.mkv` at 40 s (start position, `ended`).                                                                                                                                                                                                             |
+| `VITE_KIRO_SPIKE_SUBTITLE=<url>`      | The subtitle the exercise adds.                                                                                                                                                                                                                                                                               |
+| `VITE_KIRO_SPIKE_EXERCISE=progress`   | Plays for 25 s, pauses and leaves, for checking progress saving.                                                                                                                                                                                                                                              |
+| `VITE_KIRO_SPIKE_EXERCISE=awake`      | 8 s apart: pauses, resumes, turns Keep the screen on off and on again, then leaves the player. For watching `pmset -g assertions`.                                                                                                                                                                            |
+| `VITE_KIRO_SPIKE_EXERCISE=discord`    | With `VITE_KIRO_SPIKE_MEDIA` and a build with `KIRO_DISCORD_APPLICATION_ID`: turns Discord on, then 5 s apart seeks, pauses, resumes, hides the episode, then the title, turns Discord off and on, leaves the player, comes back and keeps playing. For checking what reaches Discord's socket.               |
+| `VITE_KIRO_SPIKE_MEDIA=<json>`        | Treats the autoplay stream as a library title (`PlaybackMedia` JSON), so progress is saved and the resume prompt appears.                                                                                                                                                                                     |
+| `av://lavfi:…` in `player_load`       | Debug builds only: mpv test patterns with known colours.                                                                                                                                                                                                                                                      |
+
+The **Player (debug)** sidebar entry (development builds) opens the source picker with test streams.
+
+```bash
+KIRO_SPIKE_LOG=1 VITE_KIRO_SPIKE_EXERCISE=1 VITE_KIRO_SPIKE_AUTOPLAY='https://github.com/ietf-wg-cellar/matroska-test-files/raw/master/test_files/test5.mkv' pnpm dev:desktop
+```
+
+## Verification
+
+Run on an Apple M1 with macOS 26.6 and Homebrew mpv 0.41.
+
+- **Multi-track MKV.** Matroska test suite `test5.mkv`: 2 audio and 8 SubRip tracks, VideoToolbox. The scripted exercise switched audio 1 → 2 and subtitles 1 → 2 → off. It rejected track 9 (`TRACK_NOT_FOUND`) and an http subtitle (`INVALID_ARGUMENT`). It added an https WebVTT (track 9, external, selected), and seek, pause, resume, volume and mute each produced their events. Leaving the player logged `render context freed` and then `player released`; re-entering attached a fresh mpv that played and switched tracks again, then detached cleanly.
+- **HLS.** The Mux test stream played with its audio renditions listed.
+- **Failures.** A 404 URL produced a recoverable `NETWORK` error and the `error` state.
+- **Start position.** `startPosition: 40` started `test5.mkv` at 40 s.
+- **End of file.** Covered by `media::mpv::events::tests::follows_a_short_file_to_the_end`, which runs the real event thread against a headless mpv: `loading` → `playing` → `ended` with tracks and time updates, then a clean shutdown with mpv's last reference released.
+- **Library progress.** A dev title played through the event-driven samples:
+  - the SQLite history row was created at 5 s and updated every ~10 s and on pause;
+  - a completed entry restarted from the beginning without an offer;
+  - an unanswered resume offer was withdrawn at 20 s, after which saving resumed;
+  - the end of the file marked the entry completed.
+- **Fullscreen.** `VITE_KIRO_SPIKE_EXERCISE=fullscreen` on `test5.mkv`: the layer logged `resized 2560x1600 -> 2880x1800` on entering and `2880x1800 -> 2560x1600` on leaving, with frames drawn at each size.
+- **Preferred languages.** With audio `en` and subtitles `de, fr`, loading `test5.mkv` logged `player_select_audio_track("2")` (the English track) and `player_select_subtitle_track(Some("3"))` (German).
+- **Up next.** Checked in the browser preview: the card at 30 s from the end, the countdown pausing with playback, Cancel, autoplay of the same binge group (history entry replaced, the finished episode saved as completed and the next one from 0), and the stream list when nothing matches.
+- **Skip intro and credits.** An MKV made with ffmpeg (240 s, chapters `Previously on` 0 s, `Opening` 20 s, `Episode` 50 s, `End Credits` 200 s), served over http from localhost with range support, and `VITE_KIRO_SPIKE_EXERCISE=chapters`: the log showed `chaptersChange` with all four chapters, `player_seek(50)` from Skip intro (recap and opening together), `player_seek(240.023)` from Skip credits, then `ended`. Checked in the browser preview: the button lingering 6 s with hidden controls and moving down with them, a real click hitting the button above the controls' gradient, Up next starting at the credits and Skip credits after Cancel, and automatic skipping with Watch intro.
+- **Skip times looked up online.** Against SkipDB: `cargo test -- --ignored skipdb` looks up Breaking Bad S2E4 for a 47:33 file and gets an intro and credits, and nothing for a cut 33 s shorter, and The Big Bang Theory S11E1 for a file 10 s longer than recorded and gets the intro trimmed; fed through the renderer that answer reads `no chapters · intro 1:13–1:30, credits 46:40–47:33 (SkipDB)`. In the browser preview (`localStorage['kiro.preview.chapters'] = 'none'` or `'numbered'`; `kiro.preview.skip-times` = `none`, `other`, `error` or `slow`), with the setting turned on in Settings and S2 E4 played from the title page: Skip intro at the looked-up intro, the parts tinted on the seek bar, automatic skipping with Watch intro, Up next at the looked-up credits, and each Stats wording. With the setting off, or with the preview's named chapters, no `skip_times_lookup` was sent; with a 6 s reply, playback was already playing while Stats said `looking up on SkipDB`.
+- **Keeping the screen on.** Before the change, `pmset -g assertions` during playback listed nothing from Kiro and `PreventUserIdleDisplaySleep 0` (only coreaudiod's audio `PreventUserIdleSystemSleep`). After it, `VITE_KIRO_SPIKE_EXERCISE=awake` on the HLS test stream, with `pmset` polled every second: Kiro's `PreventUserIdleDisplaySleep "Kiro is playing video"` appeared within a second of `playing` and went away on pause, came back on resume, went away with the setting off and came back with it on, and went away on leaving the player (detach). Quitting the app mid-playback (a quit Apple Event, as ⌘Q sends) logged `keep awake: Released` and left no assertion. On Linux the Playback workflow builds it and runs clippy and the tests with the player (where the runner has no screensaver service, the failed inhibit is logged and playback carries on); the inhibit itself still needs a check on a desktop session with `gnome-session-inhibit --list`.
+- **Sync and speed.** `VITE_KIRO_SPIKE_EXERCISE=timing` on `test5.mkv` with `KIRO_SPIKE_LOG=1`: every `player_set_subtitle_delay`, `player_set_audio_delay` and `player_set_speed` was followed by a `timingChange` with mpv's own value (0.1 to 2.0 and back to 0 for the subtitles, 0.1 and 0.2 for the audio, 1.25, 1.5, then 1.25, 1, 0.75). Speed: a stretch of playback at 1× moved the position 7.54 s (3.167 → 10.708), the same stretch at 1.5× moved it 11.17 s (10.708 → 21.875). Subtitle delay: paused at 13.5 s, just after the English line at 6.7–12.5 s ends, nothing showed; at +2.0 s the line was back on screen. Audio delay was checked by mpv's reported value, not by ear. In the browser preview: the panel by mouse and by keys (Enter opens it on the subtitle delay's −, arrows move within it, Escape returns to its button), the notices, the speed badge, a subtitle delay per track (+0.3 s on one track, −0.1 s on another, each restored on switching back and after turning subtitles off and on), Z/X with subtitles off, and the next stream starting both delays at 0 at the kept speed.
+- **Discord Rich Presence.** Discord isn't installed on the Mac this was built on, so it was checked against a stand-in for Discord's socket: a small Unix-socket server at `$TMPDIR/discord-ipc-0` answering like Discord and logging every frame. The dev app (built with a made-up `KIRO_DISCORD_APPLICATION_ID`, its own identifier so the real settings stayed untouched) ran `VITE_KIRO_SPIKE_EXERCISE=discord` on the HLS test stream as Breaking Bad S2 E4. The socket received the handshake with the application ID, then "Breaking Bad" / "S2 E4" with the https poster and a start time (and the end once the duration was known), a start 5 minutes earlier after the seek, "S2 E4 · Paused" without times, the episode gone, "Watching something on Kiro" with the `kiro` asset, a clear and a close when turned off, a new connection when turned on, a clear on leaving the player and the activity again on coming back. Quitting mid-playback (a quit Apple Event, as ⌘Q sends) cleared it and closed the connection. No frame held a stream URL, an addon name or a path. `tests/discord_ipc.rs` repeats this against a socket in CI (Unix only): the exact payload, a refusal, clearing, closing, Discord not running and Discord hanging up. Still to check with the real Discord app once the application exists: how the profile card and member list render it (the `Watching` type and `status_display_type` are recent Discord features), the poster through Discord's image proxy, and the Windows named pipe.
+- **Retina.** `contentsScale 1 -> 2` on attach on a Retina panel. Moving between displays with different scale factors still needs a check by eye.
+
+- **Windows and Linux** (`.github/workflows/playback.yml`, on every push and pull request touching the desktop app). On GitHub's `windows-2025` and `ubuntu-24.04` runners: clippy and the Rust tests with the player compiled in, then `scripts/playback-smoke.mjs` runs `tauri dev --features libmpv` playing a lavfi test pattern (green with a red band across the top), pauses it with `VITE_KIRO_SPIKE_EXERCISE=smoke` so the controls stay up, screenshots the screen and checks that the pattern shows through the webview, the right way up, with the controls' icons and text drawn over it. Screenshots and the app's log are kept as artifacts. Windows renders with D3D11 (WARP, no GPU) and Linux under Xvfb with Mesa's software GL, so this checks layering and rendering, not performance. Wayland isn't covered in CI yet. The Linux packages get the same check after installing them on clean Ubuntu 22.04 and 24.04 (`.github/workflows/linux-packages.yml`, `playback-smoke.mjs --app`; see [releasing](releasing.md#ci)).
+
+Tests: `media::model` (state machine, throttling, track and chapter parsing and bounds, serialisation), `media` (validation), IPC tests for the player commands' permissions and validation (`--features libmpv`), the headless event-thread test and the libmpv wrapper's tests (properties in each format, error codes, error events, observation, wakeup; all `--features libmpv`), `chapter-skip.test.ts` (classification, parts, the part playback is in, credits to the end, the bounds shared with looked-up parts, the Stats wording), `skip_times` (query validation, parsing SkipDB responses, the release match and trimming for a different cut, undoing SkipDB's shifts, clamping, caching per episode and length, not caching failures) with the IPC test that the lookup is refused while the setting is off, `online-skip.test.ts` (which streams are looked up, the command's result, chapters winning over looked-up times), and `media::keep_awake` (only `playing` holds; held once and released on pause, end, error and idle; the setting; release for good on stop and drop; a failure retried on the next start), the headless event-thread test (the real assertion is released once the file ends), `native-player.test.ts` (ordering, snapshot and event mirroring, error mapping, subtitles on load, volume clamping, delays and speed, restart after end), `timing.test.ts` (delay and speed steps and bounds, formatting and notices, per-track subtitle delays, the kept speed), and for sync and speed `media::model` (`timingChange`, the snapshot), `media` (clamping and refusing non-numbers), the IPC test and the headless event-thread test (mpv's `sub-delay`, `audio-delay` and `speed` arrive as `timingChange`), `presence` (the activity for each state, hiding the title or episode, posters, fitting Discord's limits, playing on vs seeking; the worker: nothing while off, turning off clears and disconnects, waiting for Discord, reconnecting after it quits, the rate limit, clearing on quit), `tests/discord_ipc.rs` (the real client against a stand-in socket) and `nowPlayingFor` in `playback-request.test.ts` (nothing about the stream is passed on).
+
+## Still open
+
+- True HDR (EDR) output: unchanged, see the [spike](spikes/libmpv.md#hdr).
+- Local files (needs a path-validated command) and streams that need custom headers.
+- Linux: Wayland is not verified yet (the surface is written for it: EGL lookup, no window embedding, and GDK's Wayland display passed to mpv for VA-API interop), and VA-API hasn't been checked on real hardware ([releasing](releasing.md#hardware-decoding)).
+- No `WebPlayer` fallback or `MediaPlayerFactory` registration yet. The player page uses `NativePlayer` directly.

@@ -1,0 +1,260 @@
+# The Windows release: builds the LGPL libmpv-2.dll (cross-compiled on Linux
+# by apps/desktop/scripts/build-libmpv-windows.sh, cached on the script's
+# hash), then the NSIS installer on Windows (`pnpm build:windows`). The
+# installer is installed on the runner and the app started from there, and
+# the playback smoke test runs against the same DLL. The DLL, its licences,
+# the installer and (for tags) the libmpv sources are kept as artifacts.
+# See docs/releasing.md.
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - .github/workflows/windows.yml
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  MANIFEST: apps/desktop/src-tauri/Cargo.toml
+
+jobs:
+  libmpv:
+    name: libmpv-2.dll (LGPL)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/desktop/.libmpv-windows/dist
+            apps/desktop/.libmpv-windows/downloads
+          key: libmpv-windows-${{ hashFiles('apps/desktop/scripts/build-libmpv-windows.sh') }}
+
+      - name: Build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build nasm pkg-config
+          pipx install meson==1.12.1
+
+      - name: Build libmpv-2.dll
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: apps/desktop/scripts/build-libmpv-windows.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-windows
+          path: apps/desktop/.libmpv-windows/dist
+          if-no-files-found: error
+
+      # LGPL: the exact sources of the bundled library, for the release.
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: libmpv-windows-sources
+          path: |
+            apps/desktop/.libmpv-windows/downloads
+            !apps/desktop/.libmpv-windows/downloads/llvm-mingw-*
+            apps/desktop/scripts/build-libmpv-windows.sh
+          if-no-files-found: error
+
+  installer:
+    name: Installer
+    needs: libmpv
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      # Signing, when the repository has these secrets (scripts/sign-windows.mjs).
+      AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+      AZURE_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+      AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libmpv-windows
+          path: apps/desktop/.libmpv-windows/dist
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Signing tools
+        if: env.AZURE_ARTIFACT_SIGNING_ENDPOINT != ''
+        run: cargo install artifact-signing-cli --version 0.11.0 --locked
+
+      - name: Build the installer
+        run: pnpm build:windows
+
+      - name: Collect the installer
+        shell: pwsh
+        run: |
+          $bundle = 'apps/desktop/src-tauri/target/release/bundle/nsis'
+          $installer = Get-ChildItem $bundle -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $installer) { throw "no installer in $bundle" }
+          Write-Host "Built $($installer.Name) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+          "INSTALLER=$($installer.FullName)" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiro-windows-installer
+          path: ${{ env.INSTALLER }}
+          if-no-files-found: error
+
+      # A per-user install needs no administrator: run it silently, check what
+      # it installed, and start the installed app. libmpv-2.dll is imported at
+      # load time, so a missing or broken DLL stops the app from starting.
+      - name: Install and start
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath $env:INSTALLER -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "installer exited with $($process.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Kiro'
+          Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length
+          foreach ($file in 'Kiro.exe', 'libmpv-2.dll', 'licenses\README.txt', 'licenses\mpv\LICENSE.LGPL') {
+            if (-not (Test-Path (Join-Path $dir $file))) { throw "not installed: $file" }
+          }
+          Get-AuthenticodeSignature (Join-Path $dir 'Kiro.exe'), (Join-Path $dir 'libmpv-2.dll'), $env:INSTALLER |
+            Format-Table Status, Path
+          $app = Start-Process -FilePath (Join-Path $dir 'Kiro.exe') -PassThru
+          Start-Sleep -Seconds 20
+          if ($app.HasExited) { throw "Kiro exited with $($app.ExitCode)" }
+          $app.Refresh()
+          $mpv = $app.Modules | Where-Object ModuleName -eq 'libmpv-2.dll'
+          if (-not $mpv) { throw 'libmpv-2.dll is not loaded' }
+          Write-Host "Kiro is running (pid $($app.Id)) with $($mpv.FileName)"
+          $webview = Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" |
+            Where-Object CommandLine -match 'app\.kiro\.desktop'
+          if (-not $webview) { throw 'the WebView2 runtime did not start for Kiro' }
+          $out = Join-Path $env:RUNNER_TEMP 'installed'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $shot.Size)
+          $shot.Save((Join-Path $out 'installed-app.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+          Stop-Process -Id $app.Id -Force
+
+      # The installed libmpv opens an HTTPS stream (FFmpeg's TLS is Schannel)
+      # and finds its video, through mpv's client API with no window.
+      - name: libmpv over HTTPS (Schannel)
+        shell: pwsh
+        run: |
+          $env:PATH = "$(Join-Path $env:LOCALAPPDATA 'Kiro');$env:PATH"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class Mpv {
+            const string Lib = "libmpv-2.dll";
+            [DllImport(Lib)] public static extern IntPtr mpv_create();
+            [DllImport(Lib)] public static extern int mpv_initialize(IntPtr h);
+            [DllImport(Lib)] public static extern int mpv_set_option_string(IntPtr h,
+              [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string value);
+            [DllImport(Lib)] public static extern int mpv_command_string(IntPtr h,
+              [MarshalAs(UnmanagedType.LPUTF8Str)] string command);
+            [DllImport(Lib)] public static extern IntPtr mpv_wait_event(IntPtr h, double timeout);
+            [DllImport(Lib)] public static extern IntPtr mpv_get_property_string(IntPtr h,
+              [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+            [DllImport(Lib)] public static extern void mpv_terminate_destroy(IntPtr h);
+          }
+          '@
+          $mpv = [Mpv]::mpv_create()
+          foreach ($option in @(@('vo', 'null'), @('ao', 'null'), @('pause', 'yes'), @('terminal', 'yes'), @('msg-level', 'all=warn'))) {
+            [void][Mpv]::mpv_set_option_string($mpv, $option[0], $option[1])
+          }
+          if ([Mpv]::mpv_initialize($mpv) -lt 0) { throw 'mpv_initialize failed' }
+          $url = 'https://test-videos.co.uk/vids/jellyfish/mp4/h265/1080/Jellyfish_1080_10s_5MB.mp4'
+          [void][Mpv]::mpv_command_string($mpv, "loadfile $url")
+          $deadline = (Get-Date).AddSeconds(60)
+          $loaded = $false
+          while (-not $loaded -and (Get-Date) -lt $deadline) {
+            $event = [System.Runtime.InteropServices.Marshal]::ReadInt32([Mpv]::mpv_wait_event($mpv, 1))
+            if ($event -eq 7) { throw "mpv could not open $url (see its log above)" } # MPV_EVENT_END_FILE
+            $loaded = $event -eq 8 # MPV_EVENT_FILE_LOADED
+          }
+          if (-not $loaded) { throw "timed out opening $url" }
+          $codec = [System.Runtime.InteropServices.Marshal]::PtrToStringUTF8([Mpv]::mpv_get_property_string($mpv, 'video-codec'))
+          Write-Host "Opened $url over HTTPS: $codec"
+          if (-not $codec) { throw 'no video track' }
+          [Mpv]::mpv_terminate_destroy($mpv)
+
+      # Without signing secrets: check the signing hook itself with a
+      # throwaway self-signed certificate.
+      - name: Signing hook (self-signed)
+        if: env.WINDOWS_CERTIFICATE == '' && env.AZURE_ARTIFACT_SIGNING_ENDPOINT == ''
+        shell: pwsh
+        working-directory: apps/desktop
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Kiro CI test' `
+            -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $password = [guid]::NewGuid().ToString()
+          $pfx = Join-Path $env:RUNNER_TEMP 'test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx `
+            -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
+          $env:WINDOWS_CERTIFICATE = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
+          $env:WINDOWS_CERTIFICATE_PASSWORD = $password
+          $dll = Join-Path $env:RUNNER_TEMP 'libmpv-2.dll'
+          Copy-Item .libmpv-windows/dist/bin/libmpv-2.dll $dll
+          node scripts/sign-windows.mjs $dll
+          if ($LASTEXITCODE -ne 0) { throw 'sign-windows.mjs failed' }
+          $signature = Get-AuthenticodeSignature $dll
+          if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+            throw "not signed: $($signature.StatusMessage)"
+          }
+          if (-not $signature.TimeStamperCertificate) { throw 'not timestamped' }
+          Write-Host "Signed by $($signature.SignerCertificate.Subject), timestamped by $($signature.TimeStamperCertificate.Subject)"
+          Remove-Item $cert.PSPath
+
+      - name: Tests (with the player, against this libmpv)
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\apps\desktop\.libmpv-windows\dist\bin;$env:PATH"
+          cargo test --manifest-path $env:MANIFEST --features libmpv
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
+
+      - name: Smoke test (D3D11 WARP, this libmpv)
+        working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          $env:KIRO_LIBMPV_DIR = "$PWD\.libmpv-windows\dist\bin"
+          node scripts/playback-smoke.mjs "$env:RUNNER_TEMP\smoke"
+          if ($LASTEXITCODE -ne 0) { throw 'smoke test failed' }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-checks
+          path: |
+            ${{ runner.temp }}/installed
+            ${{ runner.temp }}/smoke
+          if-no-files-found: ignore

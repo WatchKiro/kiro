@@ -1,0 +1,32 @@
+{
+  "name": "@kiro/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Kiro cloud API (accounts, sync). Not required for local playback.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false --env-file-if-exists=.env src/server.ts",
+    "build": "node scripts/build.js",
+    "start": "node --env-file-if-exists=.env --enable-source-maps dist/server.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@kiro/types": "workspace:*",
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@kiro/config": "workspace:*",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.2",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3"
+  }
+}

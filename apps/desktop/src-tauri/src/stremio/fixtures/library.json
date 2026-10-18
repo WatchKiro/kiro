@@ -1,0 +1,210 @@
+{
+  "result": [
+    {
+      "_id": "tt0000001",
+      "name": "An Anonymised Film",
+      "type": "movie",
+      "poster": "https://images.metahub.space/poster/medium/tt0000001/img",
+      "posterShape": "poster",
+      "removed": false,
+      "temp": false,
+      "_ctime": "2023-01-14T19:20:31.441Z",
+      "_mtime": "2024-02-10T21:03:12.004Z",
+      "state": {
+        "lastWatched": "2024-02-10T21:03:11.998Z",
+        "timeWatched": 3123000,
+        "timeOffset": 3120456,
+        "overallTimeWatched": 3123000,
+        "timesWatched": 0,
+        "flaggedWatched": 0,
+        "duration": 8520000,
+        "video_id": "tt0000001",
+        "watched": "",
+        "noNotif": false
+      },
+      "behaviorHints": {
+        "defaultVideoId": "tt0000001",
+        "featuredVideoId": null,
+        "hasScheduledVideos": false
+      }
+    },
+    {
+      "_id": "tt0000002",
+      "name": "An Anonymised Series",
+      "type": "series",
+      "poster": "https://images.metahub.space/poster/medium/tt0000002/img",
+      "posterShape": "poster",
+      "removed": false,
+      "temp": false,
+      "_ctime": "2022-11-02T08:15:00.000Z",
+      "_mtime": "2024-02-09T22:41:05.120Z",
+      "state": {
+        "lastWatched": "2024-02-09T22:41:05.100Z",
+        "timeWatched": 1325000,
+        "timeOffset": 1320456,
+        "overallTimeWatched": 98123000,
+        "timesWatched": 0,
+        "flaggedWatched": 0,
+        "duration": 2820000,
+        "video_id": "tt0000002:5:16",
+        "watched": "tt0000002:5:15:eJyLjgUAARUAuQ==",
+        "noNotif": false
+      },
+      "behaviorHints": {
+        "defaultVideoId": null,
+        "featuredVideoId": null,
+        "hasScheduledVideos": false
+      }
+    },
+    {
+      "_id": "tt0000003",
+      "name": "A Finished Film",
+      "type": "movie",
+      "poster": "http://images.example.org/poster/tt0000003.jpg",
+      "posterShape": "poster",
+      "removed": false,
+      "temp": false,
+      "_ctime": "2023-06-01T18:00:00.000Z",
+      "_mtime": "2023-06-01T20:05:00.000Z",
+      "state": {
+        "lastWatched": "2023-06-01T20:04:59.000Z",
+        "timeWatched": 7100000,
+        "timeOffset": 0,
+        "overallTimeWatched": 7100000,
+        "timesWatched": 1,
+        "flaggedWatched": 1,
+        "duration": 7200000,
+        "video_id": "tt0000003",
+        "watched": "",
+        "noNotif": false
+      }
+    },
+    {
+      "_id": "tt0000004",
+      "name": "A Saved Series",
+      "type": "series",
+      "poster": "https://images.metahub.space/poster/medium/tt0000004/img",
+      "posterShape": "poster",
+      "removed": false,
+      "temp": false,
+      "_ctime": "2024-01-20T12:00:00.000Z",
+      "_mtime": "2024-01-20T12:00:00.000Z",
+      "state": {
+        "lastWatched": "1970-01-01T00:00:00.000Z",
+        "timeWatched": 0,
+        "timeOffset": 0,
+        "overallTimeWatched": 0,
+        "timesWatched": 0,
+        "flaggedWatched": 0,
+        "duration": 0,
+        "video_id": null,
+        "watched": null,
+        "noNotif": false
+      }
+    },
+    {
+      "_id": "tt0000005",
+      "name": "A Series Watched Without Saving",
+      "type": "series",
+      "poster": "",
+      "posterShape": "poster",
+      "removed": true,
+      "temp": true,
+      "_ctime": "2024-01-05T19:00:00.000Z",
+      "_mtime": "2024-01-05T19:30:00.000Z",
+      "state": {
+        "lastWatched": "2024-01-05T19:29:58.000Z",
+        "timeWatched": 600000,
+        "timeOffset": 600000,
+        "overallTimeWatched": 600000,
+        "timesWatched": 0,
+        "flaggedWatched": 0,
+        "duration": 1500000,
+        "video_id": "tt0000005:1:2",
+        "watched": "",
+        "noNotif": false
+      }
+    },
+    {
+      "_id": "tt0000006",
+      "name": "A Removed Film",
+      "type": "movie",
+      "poster": "https://images.metahub.space/poster/medium/tt0000006/img",
+      "posterShape": "poster",
+      "removed": true,
+      "temp": false,
+      "_ctime": "2021-03-03T10:00:00.000Z",
+      "_mtime": "2023-03-03T10:00:00.000Z",
+      "state": {
+        "lastWatched": "2021-03-04T22:00:00.000Z",
+        "timeWatched": 1000000,
+        "timeOffset": 1000000,
+        "overallTimeWatched": 1000000,
+        "timesWatched": 0,
+        "flaggedWatched": 0,
+        "duration": 6000000,
+        "video_id": "tt0000006",
+        "watched": "",
+        "noNotif": false
+      }
+    },
+    {
+      "_id": "tt0000007",
+      "name": "Nearly The End",
+      "type": "movie",
+      "poster": "https://images.metahub.space/poster/medium/tt0000007/img",
+      "posterShape": "poster",
+      "removed": false,
+      "temp": false,
+      "_ctime": "2023-12-24T15:00:00.000Z",
+      "_mtime": "2023-12-24T17:00:00.000Z",
+      "state": {
+        "lastWatched": "2023-12-24T16:59:00.000Z",
+        "timeWatched": 5700000,
+        "timeOffset": 5700000,
+        "overallTimeWatched": 5700000,
+        "timesWatched": 0,
+        "flaggedWatched": 0,
+        "duration": 6000000,
+        "video_id": "tt0000007",
+        "watched": "",
+        "noNotif": false
+      }
+    },
+    {
+      "_id": "https://media.example.org/video.mp4",
+      "name": "A pasted link",
+      "type": "other",
+      "poster": null,
+      "removed": false,
+      "temp": true,
+      "_ctime": "2024-01-01T00:00:00.000Z",
+      "_mtime": "2024-01-01T00:00:00.000Z",
+      "state": { "timeOffset": 1000, "duration": 2000, "lastWatched": "2024-01-01T00:00:00.000Z" }
+    },
+    {
+      "_id": "tt0000009",
+      "type": "movie",
+      "removed": false,
+      "temp": false,
+      "_mtime": "2024-01-01T00:00:00.000Z",
+      "state": {}
+    },
+    {
+      "_id": "tt0000010",
+      "name": "Opened But Not Played",
+      "type": "movie",
+      "removed": true,
+      "temp": true,
+      "_ctime": "2024-01-02T00:00:00.000Z",
+      "_mtime": "2024-01-02T00:00:00.000Z",
+      "state": {
+        "timeOffset": 0,
+        "duration": 0,
+        "timesWatched": 0,
+        "lastWatched": "2024-01-02T00:00:00.000Z"
+      }
+    },
+    "not an item"
+  ]
+}

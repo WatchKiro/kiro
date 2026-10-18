@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "depends": [
+          "libegl1",
+          "libva2",
+          "libva-drm2",
+          "libva-wayland2",
+          "libdrm2",
+          "libwayland-client0",
+          "libwayland-cursor0",
+          "libxkbcommon0",
+          "libpulse0",
+          "libasound2t64 | libasound2"
+        ],
+        "files": {
+          "/usr/lib/kiro/libmpv.so.2": "../.libmpv/dist/lib/libmpv.so.2"
+        }
+      }
+    }
+  }
+}

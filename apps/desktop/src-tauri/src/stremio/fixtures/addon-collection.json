@@ -1,0 +1,130 @@
+{
+  "result": {
+    "addons": [
+      {
+        "transportUrl": "https://v3-cinemeta.strem.io/manifest.json",
+        "transportName": "http",
+        "manifest": {
+          "id": "com.linvo.cinemeta",
+          "version": "3.0.13",
+          "name": "Cinemeta",
+          "description": "The official addon for movie and series catalogs",
+          "resources": ["catalog", "meta", "addon_catalog"],
+          "types": ["movie", "series"],
+          "idPrefixes": ["tt"],
+          "catalogs": [
+            {
+              "type": "movie",
+              "id": "top",
+              "name": "Popular",
+              "extra": [{ "name": "genre" }, { "name": "skip" }]
+            },
+            {
+              "type": "series",
+              "id": "top",
+              "name": "Popular",
+              "extra": [{ "name": "genre" }, { "name": "skip" }]
+            }
+          ],
+          "behaviorHints": { "newEpisodeNotifications": true }
+        },
+        "flags": { "official": true, "protected": true }
+      },
+      {
+        "transportUrl": "http://127.0.0.1:11470/local-addon/manifest.json",
+        "transportName": "",
+        "manifest": {
+          "id": "org.stremio.local",
+          "version": "1.10.0",
+          "name": "Local Files",
+          "description": "Local add-on to find playable files: .torrent, .mp4, .mkv and .avi",
+          "resources": [
+            { "name": "meta", "types": ["other"], "idPrefixes": ["local:", "bt:"] },
+            "stream"
+          ],
+          "types": ["movie", "series", "other"],
+          "catalogs": []
+        },
+        "flags": { "official": true, "protected": true }
+      },
+      {
+        "transportUrl": "https://watchhub.strem.io/manifest.json",
+        "transportName": "http",
+        "manifest": {
+          "id": "org.stremio.watchhub",
+          "version": "1.3.0",
+          "name": "WatchHub",
+          "description": "Find where to stream your favourite movies and shows",
+          "resources": ["stream"],
+          "types": ["movie", "series"],
+          "idPrefixes": ["tt"],
+          "catalogs": []
+        },
+        "flags": { "official": true, "protected": false }
+      },
+      {
+        "transportUrl": "https://opensubtitles-v3.strem.io/manifest.json",
+        "transportName": "http",
+        "manifest": {
+          "id": "org.stremio.opensubtitlesv3",
+          "version": "1.0.0",
+          "name": "OpenSubtitles v3",
+          "description": "OpenSubtitles v3 Addon for Stremio",
+          "resources": ["subtitles"],
+          "types": ["movie", "series"],
+          "idPrefixes": ["tt"],
+          "catalogs": []
+        },
+        "flags": { "official": true, "protected": false }
+      },
+      {
+        "transportUrl": "https://streams.example.org/eyJyZWdpb24iOiJ1ayJ9/manifest.json",
+        "transportName": "http",
+        "manifest": {
+          "id": "org.example.streams",
+          "version": "2.4.1",
+          "name": "Example Streams",
+          "description": "A configured community addon (anonymised)",
+          "resources": ["stream"],
+          "types": ["movie", "series"],
+          "idPrefixes": ["tt", "kitsu"],
+          "catalogs": [],
+          "behaviorHints": { "configurable": true }
+        },
+        "flags": { "official": false, "protected": false }
+      },
+      {
+        "transportUrl": "https://unnamed.example.org/manifest.json",
+        "manifest": {
+          "id": "org.example.unnamed",
+          "version": "0.0.1",
+          "resources": ["catalog"],
+          "types": ["movie"],
+          "catalogs": [{ "type": "movie", "id": "list" }]
+        }
+      },
+      {
+        "transportUrl": "http://insecure.example.org/manifest.json",
+        "transportName": "http",
+        "manifest": {
+          "id": "org.example.insecure",
+          "version": "1.0.0",
+          "name": "Insecure Addon",
+          "resources": ["stream"],
+          "types": ["movie"],
+          "catalogs": []
+        },
+        "flags": { "official": false, "protected": false }
+      },
+      {
+        "transportUrl": "https://watchhub.strem.io/manifest.json",
+        "manifest": {
+          "id": "org.stremio.watchhub",
+          "version": "1.3.0",
+          "name": "WatchHub (duplicate)"
+        }
+      }
+    ],
+    "lastModified": "2024-02-10T21:03:12.004Z"
+  }
+}

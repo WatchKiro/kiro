@@ -1,0 +1,14 @@
+# Claude Code session worktrees: full repo copies with their own builds.
+.claude/
+
+pnpm-lock.yaml
+node_modules/
+dist/
+.next/
+.turbo/
+coverage/
+
+# Tauri build output and generated files (any depth, e.g. inside worktrees).
+**/src-tauri/target/
+**/src-tauri/gen/
+**/src-tauri/icons/

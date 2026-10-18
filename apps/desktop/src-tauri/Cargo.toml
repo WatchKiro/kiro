@@ -1,0 +1,135 @@
+[package]
+name = "kiro-desktop"
+version = "0.1.0"
+description = "Kiro desktop application"
+authors = ["Kiro contributors"]
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[lib]
+# `staticlib`/`cdylib` are required for future mobile targets (Android); `rlib` for desktop and tests.
+name = "kiro_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Native playback through libmpv (macOS, Windows, Linux). Requires libmpv:
+# `brew install mpv` (macOS), the distribution's `libmpv-dev` (Linux), or an
+# mpv-dev package with `KIRO_LIBMPV_DIR` pointing at `libmpv-2.dll`
+# (Windows). Off by default so normal builds do not need mpv; `pnpm dev`
+# turns it on automatically when libmpv is found (scripts/tauri-dev.js).
+# Force it with `dev:mpv`.
+libmpv = [
+  "dep:objc2",
+  "dep:objc2-app-kit",
+  "dep:objc2-foundation",
+  "dep:objc2-quartz-core",
+  "dep:objc2-open-gl",
+  "dep:objc2-core-foundation",
+  "dep:objc2-core-video",
+  "dep:windows",
+  "dep:webview2-com",
+  "dep:gtk",
+  "dep:webkit2gtk",
+  "dep:keepawake",
+]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+# Discord Rich Presence over Discord's local IPC (src/presence), used only
+# when the user turns it on. MIT. Pinned: the payload and socket handling
+# were reviewed at this version.
+discord-rich-presence = "=1.1.0"
+# Cancelling in-flight addon requests (`Abortable`).
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+percent-encoding = "2"
+# Addon HTTP transport. HTTP/1.1 + rustls with the `ring` provider (no
+# aws-lc/cmake build), OS certificate verification, no proxy/cookie/
+# compression features.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Library database (watchlist, watch history). SQLite is compiled in so every
+# platform gets the same, current version.
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.12", features = [] }
+thiserror = "2"
+url = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "NSGraphics",
+  "NSResponder",
+  "NSView",
+  "NSWindow",
+  "objc2-quartz-core",
+] }
+objc2-foundation = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "NSGeometry",
+  "NSKeyValueCoding",
+  "NSString",
+  "NSValue",
+] }
+objc2-core-foundation = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "CFDate",
+  "CFCGTypes",
+] }
+objc2-core-video = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "CVBase",
+] }
+objc2-quartz-core = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "CALayer",
+  "CAOpenGLLayer",
+  "objc2-open-gl",
+  "objc2-core-foundation",
+  "objc2-core-video",
+] }
+objc2-open-gl = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "CGLTypes",
+  "CGLCurrent",
+] }
+
+# The video surfaces under the webview (src/media/mpv/{win32,linux}.rs). The
+# same versions Tauri's webview (wry) uses, so nothing is built twice.
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = { version = "0.39", optional = true }
+windows = { version = "0.62", optional = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }
+webkit2gtk = { version = "2.0", optional = true }
+
+# Keeps the display awake while the player plays (src/media/keep_awake.rs):
+# an IOPMAssertion on macOS, org.freedesktop.ScreenSaver.Inhibit over D-Bus
+# on Linux. Not needed on Windows, where mpv's own window does it. Pinned:
+# 0.6.1 changes nothing in the library.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+keepawake = { version = "=0.6.0", optional = true }
+
+[dev-dependencies]
+# Mock runtime for IPC/permission tests.
+tauri = { version = "2.12", features = ["test"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true

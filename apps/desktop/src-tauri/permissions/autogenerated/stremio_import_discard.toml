@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stremio-import-discard"
+description = "Enables the stremio_import_discard command without any pre-configured scope."
+commands.allow = ["stremio_import_discard"]
+
+[[permission]]
+identifier = "deny-stremio-import-discard"
+description = "Denies the stremio_import_discard command without any pre-configured scope."
+commands.deny = ["stremio_import_discard"]

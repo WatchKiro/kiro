@@ -1,0 +1,238 @@
+@import 'tailwindcss';
+@import '@kiro/ui/styles.css';
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+@theme {
+  --animate-fade-up: fade-up 0.9s var(--ease-out-soft) both;
+  --animate-marquee: marquee 38s linear infinite;
+  --animate-progress: progress 14s linear infinite;
+  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes marquee {
+    to {
+      transform: translateX(-50%);
+    }
+  }
+
+  @keyframes progress {
+    from {
+      transform: scaleX(0.38);
+    }
+    to {
+      transform: scaleX(0.66);
+    }
+  }
+
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+@layer base {
+  :root {
+    /* Height of the fixed site header; hero sections pad by this amount. */
+    --header-h: 4rem;
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
+  body {
+    background-color: var(--color-ink-950);
+    color: var(--color-ink-100);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-accent) 40%, transparent);
+  }
+
+  /* Native accordions on the FAQ. */
+  details > summary {
+    list-style: none;
+  }
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+}
+
+/* A faint dot grid that fades out towards the edges. Used behind the hero. */
+@utility bg-dots {
+  background-image: radial-gradient(rgb(255 255 255 / 0.09) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Thin, glowing hairline used to separate sections. */
+@utility hairline-glow {
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in oklab, var(--color-accent-strong) 55%, transparent),
+    transparent
+  );
+}
+
+/*
+ * Mascot animation. Mirrors the desktop splash screen (apps/desktop/index.html)
+ * so the character behaves the same everywhere. `--look-x` / `--look-y` are
+ * set by the component from the pointer position (-1..1).
+ */
+.mascot-glow {
+  background:
+    radial-gradient(closest-side at 44% 46%, rgb(132 60 251 / 0.55), transparent 72%),
+    radial-gradient(closest-side at 62% 60%, rgb(93 123 255 / 0.35), transparent 76%);
+  filter: blur(28px);
+  animation: mascot-glow 3s ease-in-out infinite alternate;
+}
+
+.mascot-shadow {
+  background: radial-gradient(closest-side, rgb(4 3 10 / 0.8), transparent);
+  animation: mascot-shadow 3s ease-in-out infinite alternate;
+}
+
+.mascot-body {
+  filter: drop-shadow(0 24px 40px rgb(8 7 13 / 0.6));
+  animation: mascot-float 3s ease-in-out infinite alternate;
+}
+
+.mascot-fin {
+  transform-box: fill-box;
+  transform-origin: 92% 8%;
+  animation: mascot-wave 3.6s ease-in-out 0.8s infinite;
+}
+
+.mascot-visor {
+  transform: translate(calc(var(--look-x) * 12px), calc(var(--look-y) * 9px));
+}
+
+.mascot-eyes {
+  transform: translate(calc(var(--look-x) * 22px), calc(var(--look-y) * 16px));
+}
+
+.mascot-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mascot-blink 4.2s ease-in-out 1.2s infinite;
+}
+
+.mascot-eye:last-child {
+  animation-delay: 1.26s;
+}
+
+.mascot-sheen {
+  animation: mascot-sheen 7s ease-in-out 2s infinite;
+}
+
+@keyframes mascot-float {
+  from {
+    transform: translateY(3%);
+  }
+  to {
+    transform: translateY(-3%);
+  }
+}
+
+@keyframes mascot-shadow {
+  from {
+    opacity: 0.9;
+    transform: translateX(-50%) scaleX(1);
+  }
+  to {
+    opacity: 0.5;
+    transform: translateX(-50%) scaleX(0.8);
+  }
+}
+
+@keyframes mascot-glow {
+  from {
+    opacity: 0.65;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes mascot-blink {
+  0%,
+  88%,
+  100% {
+    transform: scaleY(1);
+  }
+  91% {
+    transform: scaleY(0.08);
+  }
+  94% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes mascot-wave {
+  0%,
+  55%,
+  100% {
+    transform: rotate(0);
+  }
+  65% {
+    transform: rotate(16deg);
+  }
+  75% {
+    transform: rotate(-3deg);
+  }
+  85% {
+    transform: rotate(10deg);
+  }
+}
+
+@keyframes mascot-sheen {
+  0%,
+  70%,
+  100% {
+    transform: translateX(-60%);
+  }
+  85% {
+    transform: translateX(60%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot *,
+  .animate-marquee,
+  .animate-progress,
+  .animate-pulse-soft {
+    animation: none !important;
+  }
+  .mascot-visor,
+  .mascot-eyes {
+    transform: none;
+  }
+}

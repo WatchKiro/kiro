@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-install"
+description = "Enables the addon_install command without any pre-configured scope."
+commands.allow = ["addon_install"]
+
+[[permission]]
+identifier = "deny-addon-install"
+description = "Denies the addon_install command without any pre-configured scope."
+commands.deny = ["addon_install"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-fetch-manifest"
+description = "Enables the addon_fetch_manifest command without any pre-configured scope."
+commands.allow = ["addon_fetch_manifest"]
+
+[[permission]]
+identifier = "deny-addon-fetch-manifest"
+description = "Denies the addon_fetch_manifest command without any pre-configured scope."
+commands.deny = ["addon_fetch_manifest"]

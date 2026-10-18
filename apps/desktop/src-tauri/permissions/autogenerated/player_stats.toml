@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-stats"
+description = "Enables the player_stats command without any pre-configured scope."
+commands.allow = ["player_stats"]
+
+[[permission]]
+identifier = "deny-player-stats"
+description = "Denies the player_stats command without any pre-configured scope."
+commands.deny = ["player_stats"]

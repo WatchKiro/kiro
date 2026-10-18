@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-title-state"
+description = "Enables the library_title_state command without any pre-configured scope."
+commands.allow = ["library_title_state"]
+
+[[permission]]
+identifier = "deny-library-title-state"
+description = "Denies the library_title_state command without any pre-configured scope."
+commands.deny = ["library_title_state"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-continue-watching"
+description = "Enables the library_continue_watching command without any pre-configured scope."
+commands.allow = ["library_continue_watching"]
+
+[[permission]]
+identifier = "deny-library-continue-watching"
+description = "Denies the library_continue_watching command without any pre-configured scope."
+commands.deny = ["library_continue_watching"]

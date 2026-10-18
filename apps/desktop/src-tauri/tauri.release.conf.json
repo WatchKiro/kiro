@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../.libmpv/dist/licenses/": "licenses/"
+    },
+    "macOS": {
+      "frameworks": ["../.libmpv/dist/lib/libmpv.2.dylib"],
+      "signingIdentity": "-"
+    }
+  }
+}

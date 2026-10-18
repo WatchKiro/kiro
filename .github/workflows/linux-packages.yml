@@ -1,0 +1,226 @@
+# Linux release packages: builds the LGPL libmpv (cached) and the AppImage
+# and .deb on Ubuntu 22.04 (`pnpm build:linux`), then installs each package
+# on clean Ubuntu 22.04 and 24.04 containers and runs the playback smoke test
+# (apps/desktop/scripts/playback-smoke.mjs --app) against the installed app.
+# Packages, libmpv's sources and the test screenshots are kept as artifacts.
+# See docs/releasing.md.
+name: Linux packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - .github/workflows/linux-packages.yml
+      - pnpm-lock.yaml
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - .github/workflows/linux-packages.yml
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: linux-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (Ubuntu 22.04)
+    # The oldest supported base, so the packages run on everything newer.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential nasm pkg-config ninja-build python3-pip perl file \
+            libva-dev libdrm-dev libegl-dev libxkbcommon-dev libpulse-dev libasound2-dev libffi-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev
+          # Ubuntu 22.04's meson is too old for fontconfig and mpv.
+          python3 -m pip install --user --require-hashes -r /dev/stdin <<'EOF'
+          meson==1.12.1 --hash=sha256:930bc7542cbd9f57009e182fd014eba48cf1a0180a7b9006d2d32d8f168d8b02
+          EOF
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: libmpv cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/desktop/.libmpv/dist
+            apps/desktop/.libmpv/downloads
+          key: libmpv-linux-x86_64-ubuntu22.04-${{ hashFiles('apps/desktop/scripts/build-libmpv-linux.sh') }}
+
+      - name: libmpv
+        run: apps/desktop/scripts/build-libmpv-linux.sh
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: linux-release
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Packages
+        run: pnpm build:linux
+
+      - name: Inspect
+        working-directory: apps/desktop/src-tauri/target/release/bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/packages"
+          cp deb/*.deb appimage/*.AppImage "$RUNNER_TEMP/packages/"
+          ls -l "$RUNNER_TEMP/packages"
+          deb="$(ls deb/*.deb)"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          mkdir -p "$RUNNER_TEMP/deb" && dpkg-deb -x "$deb" "$RUNNER_TEMP/deb"
+          readelf -d "$RUNNER_TEMP"/deb/usr/bin/* | grep -E 'NEEDED|RUNPATH|RPATH'
+          cd "$RUNNER_TEMP" && "$OLDPWD"/appimage/*.AppImage --appimage-extract > /dev/null
+          echo "AppImage usr/lib:" && ls squashfs-root/usr/lib
+          readelf -d squashfs-root/usr/bin/* | grep -E 'RUNPATH|RPATH'
+
+      # The smoke test's pattern as H.264, since release builds only play
+      # http(s) streams (the test serves it locally). Also something a
+      # hardware decoder would take, to check mpv falls back to software
+      # cleanly on runners without a VA-API device.
+      - name: Test video
+        run: |
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          mkdir -p "$RUNNER_TEMP/test-video"
+          ffmpeg -hide_banner -loglevel error -f lavfi \
+            -i 'color=c=0x00ff00:s=1280x720:r=30,drawbox=x=0:y=0:w=iw:h=120:color=red:t=fill' \
+            -t 30 -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$RUNNER_TEMP/test-video/pattern-h264.mp4"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-video
+          path: ${{ runner.temp }}/test-video
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiro-linux-x86_64
+          path: ${{ runner.temp }}/packages
+          if-no-files-found: error
+
+      # LGPL: the exact sources libmpv was built from, with the build script.
+      - name: libmpv sources
+        run: |
+          mkdir -p "$RUNNER_TEMP/libmpv-sources"
+          cp apps/desktop/.libmpv/downloads/* apps/desktop/scripts/build-libmpv-linux.sh \
+            "$RUNNER_TEMP/libmpv-sources/"
+          cp -R apps/desktop/.libmpv/dist/licenses "$RUNNER_TEMP/libmpv-sources/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-linux-sources
+          path: ${{ runner.temp }}/libmpv-sources
+
+  test:
+    name: ${{ matrix.package }} on ${{ matrix.image }}${{ matrix.env && format(' ({0})', matrix.env) || '' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04']
+        package: [deb, AppImage]
+        env: ['']
+        include:
+          # What Kiro sets itself on NVIDIA (src-tauri/src/main.rs): check the
+          # video still shows through with WebKit's shared-memory transport.
+          - image: 'ubuntu:24.04'
+            package: deb
+            env: WEBKIT_DMABUF_RENDERER_FORCE_SHM=1
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apps/desktop/scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: kiro-linux-x86_64
+          path: packages
+
+      - name: Install the .deb (clean system)
+        if: matrix.package == 'deb'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ./packages/*.deb
+          bin="$(dpkg -L "$(dpkg-deb -f packages/*.deb Package)" | grep '^/usr/bin/' | head -n 1)"
+          echo "Installed $bin"
+          # Everything it links is installed by the package's dependencies.
+          if ldd "$bin" | grep 'not found'; then exit 1; fi
+          ldd "$bin" | grep -E 'libmpv|libva|libwebkit'
+          echo "APP=$bin" >> "$GITHUB_ENV"
+
+      - name: Unpack the AppImage
+        if: matrix.package == 'AppImage'
+        run: |
+          apt-get update
+          chmod +x packages/*.AppImage
+          cd packages && ./*.AppImage --appimage-extract > /dev/null && cd ..
+          # What the AppImage expects from the host, beyond the test tools
+          # below: graphics, VA-API and audio (docs/releasing.md).
+          apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libgles2 libva2 libva-drm2 libva-wayland2 libdrm2 \
+            libwayland-client0 libfontconfig1 libfreetype6 libharfbuzz0b libfribidi0 libexpat1 \
+            "$(apt-cache show libasound2t64 > /dev/null 2>&1 && echo libasound2t64 || echo libasound2)"
+          missing="$(cd packages/squashfs-root && LD_LIBRARY_PATH=usr/lib ldd usr/bin/* | grep 'not found' || true)"
+          if [ -n "$missing" ]; then echo "$missing"; exit 1; fi
+          echo "APP=$PWD/packages/squashfs-root/AppRun" >> "$GITHUB_ENV"
+
+      # A display, software GL, fonts and screenshots: what a desktop has.
+      - name: Test tools
+        run: |
+          apt-get install -y --no-install-recommends \
+            xvfb xauth imagemagick libgl1-mesa-dri fonts-dejavu-core ca-certificates
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-video
+          path: test-video
+
+      # The pattern shows through the webview, the right way up, under the
+      # controls. No VA-API device here: mpv tries hardware decoding, falls
+      # back to software and plays normally. Three runs, all of which must
+      # pass: a black video on software GL used to be intermittent
+      # (docs/playback.md, Software OpenGL).
+      - name: Smoke test
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          ${{ matrix.env && format('export {0}', matrix.env) || ':' }}
+          failed=0
+          for attempt in 1 2 3; do
+            xvfb-run -a -s "-screen 0 1600x1000x24" \
+              node apps/desktop/scripts/playback-smoke.mjs "smoke/$attempt" --app "$APP" \
+                --source test-video/pattern-h264.mp4 --expect-hwdec no || failed=$((failed + 1))
+          done
+          grep -iE 'hwdec|vaapi|software decoding' smoke/1/app.log | head -n 30
+          echo "failed attempts: $failed of 3"
+          [ "$failed" = 0 ]
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.package }}-${{ matrix.image == 'ubuntu:22.04' && '22.04' || '24.04' }}${{ matrix.env && '-force-shm' || '' }}
+          path: smoke
+          if-no-files-found: ignore

@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege capability for the main window: only Kiro's own commands, no core plugin APIs.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-app-info",
+    "allow-addon-fetch-manifest",
+    "allow-addon-fetch-resource",
+    "allow-addon-cancel-request",
+    "allow-addon-list",
+    "allow-addon-install",
+    "allow-addon-uninstall",
+    "allow-addon-set-enabled",
+    "allow-addon-move",
+    "allow-addon-defaults",
+    "allow-addon-restore-defaults",
+    "allow-library-watchlist",
+    "allow-library-watchlist-add",
+    "allow-library-watchlist-remove",
+    "allow-library-record-progress",
+    "allow-library-history",
+    "allow-library-continue-watching",
+    "allow-library-title-state",
+    "allow-library-history-remove",
+    "allow-library-history-clear",
+    "allow-settings-get",
+    "allow-settings-set"
+  ]
+}

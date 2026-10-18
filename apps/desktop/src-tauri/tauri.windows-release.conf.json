@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "mainBinaryName": "Kiro",
+  "bundle": {
+    "resources": {
+      "../.libmpv-windows/dist/bin/libmpv-2.dll": "libmpv-2.dll",
+      "../.libmpv-windows/dist/licenses/": "licenses/"
+    },
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "webviewInstallMode": { "type": "embedBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

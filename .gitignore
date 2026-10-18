@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Rust / Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/schemas/
+
+# Tooling caches
+.turbo/
+.eslintcache
+coverage/
+
+# Environment — only commit the *.env.example templates
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# LGPL libmpv builds (apps/desktop/scripts/build-libmpv.sh, build-libmpv-linux.sh,
+# build-libmpv-windows.sh)
+apps/desktop/.libmpv/
+apps/desktop/.libmpv-windows/

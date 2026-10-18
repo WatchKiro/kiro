@@ -1,0 +1,61 @@
+/*
+ * Kiro design tokens for Tailwind CSS v4.
+ *
+ * Consumers import this after Tailwind:
+ *   @import 'tailwindcss';
+ *   @import '@kiro/ui/styles.css';
+ */
+
+/* Let Tailwind discover the utility classes used by the shared components. */
+@source './';
+
+@theme {
+  /* Neutrals: a near-black with a faint violet cast, so the brand colour sits naturally on it. */
+  --color-ink-50: #f5f4fa;
+  --color-ink-100: #e7e5f0;
+  --color-ink-200: #cbc8da;
+  --color-ink-300: #a6a2ba;
+  --color-ink-400: #7f7b94;
+  --color-ink-500: #5c5970;
+  --color-ink-600: #3b394b;
+  --color-ink-700: #272534;
+  --color-ink-800: #1a1925;
+  --color-ink-850: #13121b;
+  --color-ink-900: #0e0d15;
+  --color-ink-950: #08070d;
+
+  /* Brand: the logo's violet, with a lighter step for text and a blue for gradients and glows. */
+  --color-accent: #843cfb;
+  --color-accent-strong: #a67bff;
+  --color-glow: #5d7bff;
+
+  --radius-card: 1rem;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/*
+ * Focus for keyboard and remote use. `focus-visible:` also matches while focus
+ * came from the keys (`data-nav-focus`, set by the desktop app's navigation),
+ * as WebKit doesn't treat focus moved by script as visible after a click.
+ */
+@custom-variant focus-visible (&:is(:focus-visible, [data-nav-focus]));
+
+/* A violet ring with a soft glow, for buttons, chips and tabs. */
+@utility focus-ring {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+  box-shadow: 0 0 22px 2px rgb(132 60 251 / 0.5);
+}
+
+/* Cards (posters, episodes): the artwork lifts, ringed and glowing. */
+@utility focus-lift {
+  scale: 1.05;
+  box-shadow:
+    0 0 0 2px var(--color-accent-strong),
+    0 0 0 5px rgb(132 60 251 / 0.35),
+    0 18px 44px -10px rgb(132 60 251 / 0.65);
+  @media (prefers-reduced-motion: reduce) {
+    scale: none;
+  }
+}

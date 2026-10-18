@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-now-playing"
+description = "Enables the player_set_now_playing command without any pre-configured scope."
+commands.allow = ["player_set_now_playing"]
+
+[[permission]]
+identifier = "deny-player-set-now-playing"
+description = "Denies the player_set_now_playing command without any pre-configured scope."
+commands.deny = ["player_set_now_playing"]

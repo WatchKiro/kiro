@@ -1,0 +1,26 @@
+{
+  "name": "@kiro/addon-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kiro addon protocol: manifest and resource contracts with validation for untrusted addon responses.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@kiro/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.12.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3"
+  }
+}

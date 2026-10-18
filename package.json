@@ -1,0 +1,36 @@
+{
+  "name": "kiro",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Kiro — a lightweight, open-source media discovery and streaming application.",
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:desktop": "turbo run dev --filter=@kiro/desktop",
+    "dev:api": "turbo run dev --filter=@kiro/api",
+    "dev:web": "turbo run dev --filter=@kiro/web",
+    "build": "turbo run build",
+    "build:desktop": "pnpm --filter @kiro/desktop build:app",
+    "build:mac": "pnpm --filter @kiro/desktop build:mac",
+    "build:linux": "pnpm --filter @kiro/desktop build:linux",
+    "build:windows": "pnpm --filter @kiro/desktop build:windows",
+    "lint": "eslint . && turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@kiro/config": "workspace:*",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.10",
+    "prettier-plugin-tailwindcss": "^0.8.1",
+    "turbo": "^2.11.8",
+    "typescript": "~6.0.3"
+  }
+}
