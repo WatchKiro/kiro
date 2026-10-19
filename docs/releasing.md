@@ -51,9 +51,20 @@ When distributing a build:
 
 This is engineering guidance, not legal advice.
 
+### Build paths
+
+Compilers record where things were built, and those paths end up in the app:
+
+- Rust's panic locations, for the app and every dependency under `~/.cargo`;
+- FFmpeg's and mpv's build details (the folder libmpv was built in).
+
+`build-macos.sh` maps the home folder and the checkout to `/home` and `/kiro` for Rust (`--remap-path-prefix`). libmpv's details can't be remapped that way: they name the folder `build-libmpv.sh` ran in. Build releases in CI, or from a checkout in a neutral folder (e.g. `/tmp/kiro-release`), so a build doesn't reveal your username. Check with `strings -a Kiro.app/Contents/MacOS/kiro-desktop Kiro.app/Contents/Frameworks/libmpv.2.dylib | grep "$USER"`, which should print nothing.
+
+Pack source archives with a neutral owner, too (`tar --uid 0 --gid 0 --uname kiro --gname kiro --no-xattrs --no-mac-metadata`), since `tar` records the owner of every file.
+
 ### Signing and notarisation
 
-Without credentials the app is signed **ad hoc**. It runs on the Mac that built it. On another Mac, Gatekeeper blocks it the first time: right-click the app, choose **Open**, then confirm. You may need to allow it in **System Settings → Privacy & Security**.
+Without credentials the app is signed **ad hoc**. It runs on the Mac that built it. On another Mac, Gatekeeper blocks it the first time. On macOS 15 and later, open **System Settings → Privacy & Security** and click **Open Anyway**. On older versions, right-click the app, choose **Open**, then confirm.
 
 To ship to other people, sign with a **Developer ID Application** certificate from an Apple Developer account and notarise. Tauri does both when these are set:
 

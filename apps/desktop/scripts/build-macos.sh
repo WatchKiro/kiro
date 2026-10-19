@@ -15,9 +15,16 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   # Ad hoc signatures carry no Team ID, so the hardened runtime's library
   # validation would refuse to load libmpv. Notarisation needs the hardened
   # runtime, but an ad hoc build can't be notarised anyway.
-  echo "build-macos: no APPLE_SIGNING_IDENTITY, signing ad hoc (runs on this Mac; others need right-click > Open)"
+  echo "build-macos: no APPLE_SIGNING_IDENTITY, signing ad hoc (runs on this Mac; others need System Settings > Privacy & Security > Open Anyway)"
   configs+=(--config '{"bundle":{"macOS":{"hardenedRuntime":false}}}')
 fi
+
+# Release binaries embed source paths (Rust's panic locations, for the app
+# and every dependency in ~/.cargo). Map the home folder and the checkout to
+# neutral names, so the app doesn't reveal who built it or where. The later
+# prefix wins where both match.
+REPO="$(cd "$DESKTOP/../.." && pwd)"
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/home --remap-path-prefix=$REPO=/kiro"
 
 cd "$DESKTOP"
 KIRO_LIBMPV_DIR="$DESKTOP/.libmpv/dist/lib" pnpm exec tauri build \
