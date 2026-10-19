@@ -329,6 +329,10 @@ For Windows, `pnpm build:windows` (on Windows) makes a per-user NSIS installer w
 pnpm build:windows
 ```
 
+### Releasing
+
+Releases are built by CI, never on a maintainer's machine: bump the version in `apps/desktop/package.json` and `apps/desktop/src-tauri/Cargo.toml`, then push a tag such as `v0.2.0-beta.1`. The Release workflow builds macOS, Windows and Linux, checks that nothing in them names a home folder, and drafts a GitHub release with the installers, the signed update bundles and `latest.json`, the LGPL sources and `SHA256SUMS`. Publishing the draft releases it, and installed copies of Kiro update themselves (macOS, Windows and the AppImage; the `.deb` points at the download). See [docs/releasing.md](docs/releasing.md#cutting-a-release).
+
 ## Environment configuration
 
 Each app has a documented `.env.example`. Real `.env*` files are git-ignored.
@@ -426,6 +430,7 @@ The script needs `rsvg-convert` and `dwebp`/`cwebp` (`brew install librsvg webp`
 - Capability-based permissions: the main window can invoke only Kiro's own commands (`app_info`, `addon_*`). There is no filesystem, shell or HTTP plugin access.
 - Strict production CSP (`script-src 'self'`, no remote connections, no frames, no objects). Images may load from `https:` (addon posters and logos). The dev CSP only adds what Vite's HMR needs.
 - Command errors serialize to `{ code, message }`. Internal errors never expose paths or system details.
+- Updates (release builds) come only from this repository's GitHub releases over https, and are installed only if their signature matches the updater public key built into the app (`plugins.updater` in `tauri.conf.json`), for the version the release announces. The Rust core checks, downloads and installs; the updater plugin's own commands aren't granted to the window, which can only read the status, ask for a check, and confirm a restart ([details](docs/releasing.md#auto-update)).
 - Discord Rich Presence (Settings → General, off by default) sends Discord's local app only the title, season and episode numbers, an https poster and timestamps, never stream URLs, addon names or file paths; nothing connects to Discord while it's off ([details](docs/playback.md#discord-rich-presence)).
 - Addons are remote services and are never executed. Requests are made by the Rust core (`addons::transport`) with connect/total timeouts, a response size cap and the `AddonUrl` policy re-checked on every redirect; responses are then validated by `@kiro/addon-sdk`. Addon URLs must be https (http only for localhost). Installed addons are stored in `addons.json` in the app config directory.
 - Import from Stremio (Settings) signs in to the user's Stremio account once, from the Rust core over https with redirects refused, to read their addons, library and progress. The auth key or password is used for that one read and never stored or logged; a session Kiro opened is signed out again. Imported data is validated like any other input and never overwrites newer Kiro progress. See [docs/stremio-import.md](docs/stremio-import.md).

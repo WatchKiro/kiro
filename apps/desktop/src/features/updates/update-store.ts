@@ -59,7 +59,7 @@ export function describeUpdate(status: UpdateStatus | null): string {
     case 'disabled':
       return 'Development builds don’t update themselves.';
     case 'idle':
-      return 'Kiro looks for a new version when it starts and once a day.';
+      return 'Not checked yet.';
     case 'checking':
       return 'Checking for updates…';
     case 'upToDate':

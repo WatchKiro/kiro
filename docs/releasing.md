@@ -1,8 +1,96 @@
 # Releasing
 
+- [Cutting a release](#cutting-a-release): push a version tag; CI builds every platform and drafts the GitHub release.
+- [Secrets](#secrets): what the repository needs for releases and signing.
+- [Auto-update](#auto-update): how installed copies of Kiro update themselves, and rotating the updater key.
 - [macOS](#macos): `pnpm build:mac`, a `.dmg` with an LGPL libmpv.
 - [Linux](#linux): `pnpm build:linux`, an AppImage and a `.deb` with an LGPL libmpv.
 - [Windows](#windows): `pnpm build:windows`, an NSIS installer with an LGPL libmpv.
+
+## Cutting a release
+
+Releases are built by CI (`.github/workflows/release.yml`), never on a maintainer's machine: a local build records the builder's folders (see [Build paths](#build-paths)), and the maintainer publishes anonymously.
+
+1. **Set the version** in `apps/desktop/package.json` (the app's version) and `apps/desktop/src-tauri/Cargo.toml` (then `cargo update -p kiro-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml` to update `Cargo.lock`). Use `x.y.z` for a release and `x.y.z-beta.n` for a beta, e.g. `0.2.0-beta.1`. Versions are compared as semver: `0.2.0-beta.1` < `0.2.0-beta.2` < `0.2.0`. (MSI installers would need plain numbers, but Kiro ships NSIS only.)
+2. **Merge** that to `main`, then **tag** the commit and push the tag:
+
+   ```bash
+   git tag v0.2.0-beta.1
+   git push origin v0.2.0-beta.1
+   ```
+
+3. **Wait for the Release workflow** (about an hour; the libmpv builds are cached, so later runs are quicker). It fails straight away if the tag doesn't match both versions. It builds:
+   - **macOS** (`macos-15`, Apple Silicon): `pnpm build:mac` from a neutral folder (`/private/tmp/kiro-release`), with libmpv cached on `build-libmpv.sh`'s hash;
+   - **Windows**: `windows.yml`, which cross-compiles `libmpv-2.dll` (cached), builds the NSIS installer, installs it and runs the playback checks;
+   - **Linux**: `linux-packages.yml`, which builds libmpv (cached), the AppImage and the `.deb`, and tests both on clean Ubuntu 22.04 and 24.04.
+4. **Review the draft release** it creates (the job summary links to it). It has:
+
+   | Asset                                                  | What                                                                                              |
+   | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+   | `Kiro_<v>_aarch64.dmg`, `Kiro_<v>_x64-setup.exe`       | The macOS and Windows installers.                                                                 |
+   | `Kiro_<v>_amd64.AppImage`, `Kiro_<v>_amd64.deb`        | The Linux packages.                                                                               |
+   | `Kiro_<v>_aarch64.app.tar.gz`, `*.sig`                 | The macOS update bundle, and the update signatures of it, the Windows installer and the AppImage. |
+   | `latest.json`                                          | The update manifest ([Auto-update](#auto-update)).                                                |
+   | `kiro-<v>-libmpv-{macos,windows,linux}-sources.tar.gz` | Each platform's libmpv sources, build script and licences (LGPL), packed with a neutral owner.    |
+   | `SHA256SUMS`                                           | Checksums of everything above.                                                                    |
+
+   The installer names are the ones the website recognises (`classifyAsset` in `apps/web/src/lib/releases.ts`). The notes list the pull requests merged since the last release, how to install (with the warnings unsigned builds get; the notes say which builds are unsigned) and how updating works: **edit "What's new"** into something testers can read.
+
+5. **Publish** the draft. Tags with a pre-release suffix (`-beta.1`) are published as pre-releases, which the website's download page skips; others become GitHub's latest release. Publishing also runs `update-feed.yml`, which offers the new version to installed beta builds ([Auto-update](#auto-update)), so installed copies start updating within a day.
+
+To rebuild a release (say a runner failed), re-run the workflow, or run it by hand from **Actions → Release → Run workflow**, choosing the tag under **Use workflow from**. A draft for the tag is replaced; a published release is never touched. To withdraw a test, delete the draft and the tag (`gh release delete v0.2.0-beta.1 --cleanup-tag`).
+
+**Privacy check.** Before uploading anything, the workflow unpacks every asset (the `.dmg`, the Windows installer, the AppImage, the `.deb` and the archives) and fails if any file in them contains `/Users/`, as text or UTF-16 (`.github/scripts/scan-release.sh`). That's a macOS home folder, which would name whoever built it. Run it yourself on anything you upload by hand: `.github/scripts/scan-release.sh <files>` (needs 7-Zip, `brew install sevenzip`).
+
+## Secrets
+
+Add these under **Settings → Secrets and variables → Actions → New repository secret** on GitHub, or with `gh secret set NAME -R WatchKiro/kiro < file` (reading the value from a file keeps it out of your shell history).
+
+| Secret                                                                                         | Needed for                                                                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`                                                                    | **Required.** The updater's private key (the contents of the key file, see [Auto-update](#auto-update)). Releases fail without it.                                                                                                             |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`                                                           | **Required.** Its password.                                                                                                                                                                                                                    |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`                                              | Optional: a **Developer ID Application** certificate as a base64-encoded `.p12` (`base64 -i cert.p12 \| pbcopy`) and its password. The macOS job imports it into a temporary keychain and signs with it; without it, the app is signed ad hoc. |
+| `APPLE_SIGNING_IDENTITY`                                                                       | Optional: which identity in the certificate to use, e.g. `Developer ID Application: Name (TEAMID)`. Found automatically if left out.                                                                                                           |
+| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`                                                  | Optional, with the certificate: notarisation (an app-specific password for the Apple ID).                                                                                                                                                      |
+| `AZURE_ARTIFACT_SIGNING_*`, `AZURE_*` or `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Optional: Windows code signing ([Signing](#signing)).                                                                                                                                                                                          |
+
+Apple and Microsoft signing certificates carry the name of whoever holds them (a person or a company), and it shows in the app's signature. Keep that in mind when publishing anonymously.
+
+## Auto-update
+
+Kiro updates itself with Tauri's updater plugin (`apps/desktop/src-tauri/src/updates.rs`). Release builds check at launch (after a few seconds) and then once a day, download a newer version in the background, and check its signature against the public key built into the app (`plugins.updater.pubkey` in `tauri.conf.json`). A signature only counts if it was made for the version the manifest announces (`requireSignedVersion`), so an old, genuine update can't be passed off as a new one. Development builds never check.
+
+**What testers see.** Once the new version is downloaded, a small **Update available** card appears at the foot of the sidebar: "Kiro 0.2.0 is ready" and **Restart to update** (or **Later**, until the next launch). **Settings → General → Updates** shows the running version, where updating stands and **Check for updates**. Restarting installs the update and reopens Kiro: in place on macOS and for the AppImage; on Windows the installer runs (no prompts, no administrator rights) and starts Kiro again. The `.deb` can't replace itself (its files belong to the package manager), so it says "Kiro 0.2.0 is out" with **Download the new version**, which opens the release page. Kiro 0.1.0 beta 1 predates all this; testers on it download the next version by hand once.
+
+**Feeds.** GitHub's "latest release" link skips pre-releases, so there are two:
+
+- Stable builds read `https://github.com/WatchKiro/kiro/releases/latest/download/latest.json`: the latest stable release's own `latest.json`.
+- Builds whose version has a pre-release suffix (betas) read `https://github.com/WatchKiro/kiro/releases/download/updater/beta.json`. `update-feed.yml` copies each published release's `latest.json` there (betas and stable releases alike, never an older version), so betas get the newest version of either kind. The `updater` release that holds it is a pre-release named "Update feed", not a version of Kiro. To point betas back at an older release (say the newest is broken), run **Actions → Update feed → Run workflow** with that release's tag.
+
+`latest.json` names, for each platform, the update bundle and its signature: `darwin-aarch64` the `.app.tar.gz`, `windows-x86_64` the NSIS installer and `linux-x86_64` the AppImage. The update bundles are built only when the private key is in the environment (`tauri.updater.conf.json`, added by the build scripts).
+
+**The key pair.** It was made with `pnpm --filter @kiro/desktop tauri signer generate -w ~/.tauri/kiro-updater.key`. The private key and its password are the two required secrets above; keep a copy of both somewhere safe (a password manager), never in the repository. Anyone with them can sign updates that every installed Kiro will accept.
+
+**Rotating the key** (if it's lost or leaked). Installed copies only accept updates signed with the key they were built with, so a new key reaches testers through one release that carries the new public key but is still signed with the old private key:
+
+1. Generate a new pair: `pnpm --filter @kiro/desktop tauri signer generate -w ~/.tauri/kiro-updater-2.key`.
+2. Put the new public key (`~/.tauri/kiro-updater-2.key.pub`) in `plugins.updater.pubkey` and release that version with the **old** secrets still set.
+3. Once it's published, replace both secrets with the new private key and password. Releases from then on are signed with the new key.
+
+If the old key is lost (not leaked), step 2 isn't possible: release with the new key, and tell testers to download that version by hand once. If it leaked, do the rotation straight away, and treat updates published since the leak as suspect.
+
+**Testing an update locally.** Build an older and a newer version, both able to read a local feed over http, then let the older one update itself:
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/kiro-updater.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD='…'
+cd apps/desktop
+scripts/build-macos.sh --config '{"version":"0.2.0-beta.1","plugins":{"updater":{"dangerousInsecureTransportProtocol":true}}}'
+cp -R src-tauri/target/release/bundle/macos/Kiro.app /tmp/kiro-old/       # the "installed" copy
+scripts/build-macos.sh --config '{"version":"0.2.0-beta.2","plugins":{"updater":{"dangerousInsecureTransportProtocol":true}}}'
+```
+
+Serve `src-tauri/target/release/bundle/macos/` with a `latest.json` naming `Kiro.app.tar.gz` and the contents of `Kiro.app.tar.gz.sig` under `darwin-aarch64` (e.g. `python3 -m http.server 8765`), and start the old copy with `KIRO_UPDATE_FEED=http://127.0.0.1:8765/latest.json`. The update card appears within seconds; **Restart to update** reopens it as the new version. `KIRO_UPDATE_AUTO_INSTALL=1` (honoured only with `KIRO_UPDATE_FEED`) installs and restarts without the click, for scripted tests. Release builds without `dangerousInsecureTransportProtocol` refuse an http feed.
 
 ## macOS
 
@@ -58,7 +146,7 @@ Compilers record where things were built, and those paths end up in the app:
 - Rust's panic locations, for the app and every dependency under `~/.cargo`;
 - FFmpeg's and mpv's build details (the folder libmpv was built in).
 
-`build-macos.sh` maps the home folder and the checkout to `/home` and `/kiro` for Rust (`--remap-path-prefix`). libmpv's details can't be remapped that way: they name the folder `build-libmpv.sh` ran in. Build releases in CI, or from a checkout in a neutral folder (e.g. `/tmp/kiro-release`), so a build doesn't reveal your username. Check with `strings -a Kiro.app/Contents/MacOS/kiro-desktop Kiro.app/Contents/Frameworks/libmpv.2.dylib | grep "$USER"`, which should print nothing.
+`build-macos.sh` maps the home folder and the checkout to `/home` and `/kiro` for Rust (`--remap-path-prefix`). libmpv's details can't be remapped that way: they name the folder `build-libmpv.sh` ran in. The Release workflow builds in `/private/tmp/kiro-release` for that reason (a runner's home is `/Users/runner`), and refuses to upload anything that contains `/Users/` ([Cutting a release](#cutting-a-release)). Build by hand only from a checkout in a neutral folder too, so a build doesn't reveal your username. Check with `strings -a Kiro.app/Contents/MacOS/kiro-desktop Kiro.app/Contents/Frameworks/libmpv.2.dylib | grep "$USER"`, which should print nothing.
 
 Pack source archives with a neutral owner, too (`tar --uid 0 --gid 0 --uname kiro --gname kiro --no-xattrs --no-mac-metadata`), since `tar` records the owner of every file.
 
@@ -78,11 +166,11 @@ pnpm build:mac
 
 With a Developer ID, the app uses the hardened runtime (notarisation requires it), and Tauri signs `libmpv.2.dylib` with the same identity. Ad hoc builds turn the hardened runtime off: an ad hoc signature has no Team ID, so its library validation would refuse to load libmpv.
 
+In CI, the certificate comes from the `APPLE_CERTIFICATE` secrets ([Secrets](#secrets)), imported into a temporary keychain that's deleted when the job ends. The release notes say whether the macOS build is signed.
+
 ### Not done yet
 
 - **Intel Macs:** build libmpv for `x86_64` (FFmpeg needs `nasm`) and combine both with `lipo`, or ship a second `.dmg`.
-- **Auto-update:** Tauri's updater plugin plus a signed update feed.
-- **CI:** build the release on GitHub Actions' macOS runners, with the libmpv build cached.
 
 ## Linux
 
@@ -157,7 +245,7 @@ The usual workaround, `WEBKIT_DISABLE_DMABUF_RENDERER=1` (Tauri's [Linux graphic
 1. **Build** on Ubuntu 22.04: libmpv (cached by the build script's hash), then `pnpm build:linux`. Uploads both packages (`kiro-linux-x86_64`) and libmpv's source tarballs, build script and licences (`libmpv-linux-sources`).
 2. **Test** each package on clean `ubuntu:22.04` and `ubuntu:24.04` containers. The .deb is installed with `apt-get install ./kiro.deb` alone, and every library it links must then resolve; the AppImage gets only the host libraries listed above. With a display (Xvfb), Mesa's software GL and fonts added, `scripts/playback-smoke.mjs --app` starts the installed app with `KIRO_SMOKE_TEST_URL`: it opens the player on an H.264 copy of the test pattern (served over local http, since release builds only play http and https), pauses, and the screenshot must show the pattern through the webview, the right way up, under the controls, decoded in software after the hardware decoder probe. Each job runs it three times and all must pass, since a black video on software OpenGL used to be intermittent ([playback](playback.md), Software OpenGL). One more job runs the .deb on 24.04 with `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, the NVIDIA setting.
 
-There's no tagged-release workflow yet (for macOS either). When there is, it should run this build and attach the packages and `libmpv-linux-sources` to the release.
+The Release workflow calls this workflow with `release: true` for each version tag: the AppImage is then also signed for the updater (`.AppImage.sig`), and the packages and `libmpv-linux-sources` go on the release ([Cutting a release](#cutting-a-release)).
 
 ### Licensing
 
@@ -175,7 +263,6 @@ Not built yet. Flathub is where many Linux users look for apps, and Flatpak solv
 ### Not done yet
 
 - **arm64 Linux:** the build script is x86_64 only.
-- **Auto-update:** the AppImage supports Tauri's updater once the plugin and a signed update feed are added.
 - **Hardware decoding on real GPUs:** see Hardware decoding above.
 
 ## Windows
@@ -263,19 +350,17 @@ $env:WINDOWS_CERTIFICATE_PASSWORD = '...'
 pnpm build:windows
 ```
 
-In CI, add the same names as repository secrets; the workflow passes them through. Without them, CI checks the signing hook with a throwaway self-signed certificate instead.
+In CI, add the same names as repository secrets ([Secrets](#secrets)); the workflow passes them through, and the release notes say whether the installer is signed. Without them, CI checks the signing hook with a throwaway self-signed certificate instead.
 
 ### CI
 
-`.github/workflows/windows.yml` runs on pushes to `main`, tags (`v*`) and pull requests touching the desktop app:
+`.github/workflows/windows.yml` runs on pushes to `main` and pull requests touching the desktop app, and for each version tag from the Release workflow (`release: true`):
 
-1. **libmpv-2.dll** (Ubuntu): runs `build-libmpv-windows.sh`, cached on the script's hash, and uploads `libmpv-windows` (the DLL, headers and licences). For tags it also uploads `libmpv-windows-sources`.
+1. **libmpv-2.dll** (Ubuntu): runs `build-libmpv-windows.sh`, cached on the script's hash, and uploads `libmpv-windows` (the DLL, headers and licences). For releases it also uploads `libmpv-windows-sources` (the source tarballs, the build script and the licences).
 2. **Installer** (Windows Server 2025): `pnpm build:windows`, uploads `kiro-windows-installer`, then installs it silently, checks the installed files, starts the installed `Kiro.exe` and checks that it's running with `libmpv-2.dll` and WebView2 loaded, and has the installed DLL open an HTTPS video (Schannel). Then the Rust tests and the playback smoke test (`scripts/playback-smoke.mjs`) run against the same DLL. Screenshots are kept as `windows-checks`.
 
-Tagged builds produce the artifacts but don't publish a GitHub release yet; attach the installer and the sources to the release by hand.
+For releases, the installer is also signed for the updater (`-setup.exe.sig`), and the Release workflow puts it and the sources on the release ([Cutting a release](#cutting-a-release)).
 
 ### Not done yet
 
 - **Arm64 Windows:** llvm-mingw can target `aarch64-w64-mingw32`; the script and installer are x64 only for now.
-- **Auto-update:** Tauri's updater plugin plus a signed update feed.
-- **A release workflow** that publishes the macOS, Linux and Windows builds together for a tag.

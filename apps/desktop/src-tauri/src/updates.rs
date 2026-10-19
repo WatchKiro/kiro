@@ -120,9 +120,10 @@ fn can_install_bundle(bundle: Option<BundleType>) -> bool {
 }
 
 /// The update manifest this build follows: `KIRO_UPDATE_FEED` if set (for
-/// testing; release builds still only accept https and a correctly signed
-/// update), otherwise the beta feed for pre-release versions and the stable
-/// one for the rest.
+/// testing; release builds still only accept https, unless built with
+/// `dangerousInsecureTransportProtocol`, and a correctly signed update),
+/// otherwise the beta feed for pre-release versions and the stable one for
+/// the rest.
 fn feed_url(version: &semver::Version) -> Result<Url> {
     let url = match std::env::var("KIRO_UPDATE_FEED") {
         Ok(url) if !url.is_empty() => url,
@@ -254,6 +255,15 @@ impl Updates {
     }
 }
 
+/// Testing the updater end to end (docs/releasing.md, Auto-update): with
+/// `KIRO_UPDATE_AUTO_INSTALL=1` as well as a `KIRO_UPDATE_FEED`, an update is
+/// installed, and Kiro restarted, as soon as it's downloaded and verified,
+/// instead of waiting for Restart to update. Ignored without a test feed.
+fn install_without_asking() -> bool {
+    std::env::var_os("KIRO_UPDATE_FEED").is_some_and(|feed| !feed.is_empty())
+        && std::env::var_os("KIRO_UPDATE_AUTO_INSTALL").is_some_and(|value| value == "1")
+}
+
 /// Asks the feed whether there's a newer version. A feed that isn't there
 /// yet (nothing published to it) means there's nothing to update to.
 async fn find_update<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Update>, String> {
@@ -283,7 +293,13 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
             loop {
                 let updates = app.state::<Updates>();
                 if updates.check_due() {
-                    tauri::async_runtime::block_on(updates.check(&app));
+                    let status = tauri::async_runtime::block_on(updates.check(&app));
+                    if matches!(status, UpdateStatus::Ready { .. }) && install_without_asking() {
+                        eprintln!(
+                            "[kiro-updates] installing without asking (KIRO_UPDATE_AUTO_INSTALL)"
+                        );
+                        let _ = updates.install_and_restart(&app);
+                    }
                 }
                 std::thread::sleep(WAKE_INTERVAL);
             }

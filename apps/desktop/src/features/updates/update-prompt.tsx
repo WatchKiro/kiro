@@ -20,7 +20,7 @@ export function UpdatePrompt({ collapsed }: { collapsed: boolean }) {
   const version = offeredVersion(status);
   if (!version || version === dismissed) return null;
   const ready = status?.state === 'ready';
-  const action = ready ? 'Restart to update' : 'Download the new version';
+  const action = ready ? 'Restart to update' : 'Download';
   const run = () => void (ready ? install() : openDownload());
   const Icon = ready ? RotateCw : ArrowDownToLine;
 
@@ -58,7 +58,9 @@ export function UpdatePrompt({ collapsed }: { collapsed: boolean }) {
         </button>
         <p className="pr-6 text-[13px] font-semibold text-ink-50">Update available</p>
         <p className="mt-0.5 text-xs leading-relaxed text-ink-300">
-          {ready ? `Kiro ${version} is ready.` : `Kiro ${version} is out.`}
+          {ready
+            ? `Kiro ${version} is ready.`
+            : `Kiro ${version} is out. Download the new version to update.`}
         </p>
         {error && (
           <p role="alert" className="mt-1 text-xs leading-relaxed text-red-300">
