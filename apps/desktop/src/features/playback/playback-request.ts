@@ -33,6 +33,24 @@ export interface PlaybackSource {
 }
 
 /**
+ * How the player came to open a stream in place of another one: falling back
+ * after a stream didn't play, or a stream picked in its Streams panel
+ * (`stream-fallback.ts`).
+ */
+export interface PlaybackHandoff {
+  /** Where to start, in seconds, in place of looking up saved progress. */
+  startPosition: number;
+  /** Whether that is saved progress being resumed, which the player says ("Resumed from"). */
+  resumed: boolean;
+  /** Streams (URLs) that didn't play for this video so far, oldest first. */
+  failed: string[];
+  /** `fallback`: switched to by the player; `picked`: chosen by the viewer. */
+  reason: 'fallback' | 'picked';
+  /** For a fallback, this stream's place among those tried, e.g. 2 of 5. */
+  attempt?: { number: number; of: number };
+}
+
+/**
  * What the player should open, handed over in router state (`navigate('/player',
  * { state })`) so stream URLs never appear in the address or the query string.
  */
@@ -54,6 +72,8 @@ export interface PlaybackRequest {
   subtitles?: AddonSubtitle[];
   /** The stream's file name and size, for subtitle addons to match. */
   file?: StreamFile;
+  /** Set when this stream replaces another one in the player. */
+  handoff?: PlaybackHandoff;
 }
 
 /**
@@ -134,7 +154,8 @@ export function nowPlayingFor(request: PlaybackRequest | null): NowPlaying | nul
  */
 export function parsePlaybackRequest(state: unknown): PlaybackRequest | null {
   if (!isRecord(state)) return null;
-  const { url, title, subtitle, streamLabel, media, artwork, source, subtitles, file } = state;
+  const { url, title, subtitle, streamLabel, media, artwork, source, subtitles, file, handoff } =
+    state;
   if (typeof url !== 'string' || typeof title !== 'string') return null;
   if (subtitle !== undefined && typeof subtitle !== 'string') return null;
   try {
@@ -159,7 +180,46 @@ export function parsePlaybackRequest(state: unknown): PlaybackRequest | null {
   if (parsedSubtitles.length > 0) request.subtitles = parsedSubtitles;
   const parsedFile = parseStreamFile(file);
   if (parsedFile) request.file = parsedFile;
+  const parsedHandoff = parsePlaybackHandoff(handoff);
+  if (parsedHandoff) request.handoff = parsedHandoff;
   return request;
+}
+
+/** Longest position a handoff may start at: a day. */
+const MAX_START_POSITION = 86_400;
+/** More URLs than any play tries (`MAX_STREAM_ATTEMPTS`), with room for picks. */
+const MAX_FAILED_STREAMS = 50;
+
+/** One that doesn't check out is left out: the stream then opens as if chosen anew. */
+function parsePlaybackHandoff(value: unknown): PlaybackHandoff | null {
+  if (!isRecord(value)) return null;
+  const { startPosition, resumed, failed, reason, attempt } = value;
+  if (
+    typeof startPosition !== 'number' ||
+    !Number.isFinite(startPosition) ||
+    startPosition < 0 ||
+    startPosition > MAX_START_POSITION ||
+    typeof resumed !== 'boolean' ||
+    !Array.isArray(failed) ||
+    (reason !== 'fallback' && reason !== 'picked')
+  ) {
+    return null;
+  }
+  const handoff: PlaybackHandoff = {
+    startPosition,
+    resumed,
+    failed: failed
+      .filter((url): url is string => typeof url === 'string' && url.startsWith('https://'))
+      .slice(-MAX_FAILED_STREAMS),
+    reason,
+  };
+  if (isRecord(attempt)) {
+    const { number, of } = attempt;
+    const count = (n: unknown): n is number =>
+      typeof n === 'number' && Number.isInteger(n) && n > 0 && n <= MAX_FAILED_STREAMS;
+    if (count(number) && count(of) && number <= of) handoff.attempt = { number, of };
+  }
+  return handoff;
 }
 
 /** Only passed on to subtitle addons: a short file name and a byte count. */

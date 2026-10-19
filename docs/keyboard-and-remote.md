@@ -25,7 +25,7 @@ Kiro can be used from a sofa with arrows, Enter and Back, as on a TV. The same c
 | Z X        | Subtitles 0.1 s earlier or later (for the subtitle track showing)                                                               |
 | J K        | Audio 0.1 s earlier or later                                                                                                    |
 | [ ]        | Slower or faster: 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2×                                                                              |
-| Escape     | Close the open panel (subtitles and audio, sync and speed), else leave full screen, else go back                                |
+| Escape     | Close the open panel (streams, subtitles and audio, sync and speed), else leave full screen, else go back                       |
 | Backspace  | Go back                                                                                                                         |
 | Media keys | Play/pause, play, pause, next episode, start over, skip back/forward, stop (go back)                                            |
 

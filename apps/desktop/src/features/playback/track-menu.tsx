@@ -235,9 +235,18 @@ export function ControlButton({
   );
 }
 
-function Column({ title, children }: { title: string; children: ReactNode }) {
+export function Column({
+  title,
+  children,
+  ref,
+}: {
+  title: string;
+  children: ReactNode;
+  ref?: Ref<HTMLDivElement>;
+}) {
   return (
     <div
+      ref={ref}
       role="radiogroup"
       aria-label={title}
       data-nav-group
@@ -328,7 +337,7 @@ function AddonSubtitles({
   );
 }
 
-function Option({
+export function Option({
   selected,
   title,
   detail,

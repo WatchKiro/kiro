@@ -70,4 +70,17 @@ describe('ProgressTracker', () => {
       duration: 1000,
     });
   });
+
+  it('starts at a position the library already has without saving it again', () => {
+    const tracker = new ProgressTracker();
+    tracker.startAt(600, 0);
+    assert.equal(tracker.next(playing(3), 100), null, 'the old stream, or the new one at 0');
+    assert.equal(tracker.next(playing(600), 200), null, 'already saved');
+    assert.equal(tracker.flush(300), null, 'nothing new to flush');
+    assert.equal(tracker.next(playing(605), 5_000), null, 'not due yet');
+    assert.deepEqual(tracker.next(playing(611), SAVE_INTERVAL_MS), {
+      position: 611,
+      duration: 1000,
+    });
+  });
 });

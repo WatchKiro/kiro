@@ -43,6 +43,16 @@ export class ProgressTracker {
     this.pendingSeek = { target, until: now + SEEK_GRACE_MS };
   }
 
+  /**
+   * Starts at `position`, which the library already has (a stream switched
+   * to mid-play): as {@link expectSeek}, and nothing is saved again until
+   * playback moves on from there or the interval passes.
+   */
+  startAt(position: number, now: number) {
+    this.expectSeek(position, now);
+    this.saved = { at: now, position };
+  }
+
   /** Feeds a player sample; returns progress to save now, if any. */
   next(sample: PlaybackSample, now: number): ProgressPoint | null {
     const seek = this.pendingSeek;

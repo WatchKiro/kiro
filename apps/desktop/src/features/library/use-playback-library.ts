@@ -25,7 +25,9 @@ type Resume =
   /** Saved progress found, not yet used. */
   | { status: 'saved'; position: number }
   /** Playback was started from saved progress. */
-  | { status: 'resumed'; position: number };
+  | { status: 'resumed'; position: number }
+  /** Told where to start (a stream switch): no lookup, no question. */
+  | { status: 'given'; position: number; resumed: boolean };
 
 export interface PlaybackLibrary {
   /**
@@ -42,6 +44,8 @@ export interface PlaybackLibrary {
    * from the beginning. Call once, when loading the stream.
    */
   takeStartPosition: () => number | null;
+  /** Where {@link takeStartPosition} started playback (0: the beginning). */
+  startPosition: number;
   /** Where playback was resumed from, while that's worth showing. */
   resumedFrom: number | null;
   /** Restart from the beginning after resuming; returns the position to seek to. */
@@ -58,12 +62,22 @@ export interface PlaybackLibrary {
  * - `ask`: before starting, ask whether to resume ({@link PlaybackLibrary.asking});
  * - `never`: start from the beginning. Progress is still saved, so Continue
  *   watching and the Library keep showing it.
+ *
+ * A stream opened in place of another one (`start`, from a fallback or a
+ * stream picked in the player) starts where that one was instead: the
+ * setting was already applied, and the viewer already answered.
  */
 export function usePlaybackLibrary(
   media: PlaybackMedia | undefined,
   sample: PlaybackSample | null,
+  start?: { position: number; resumed: boolean },
 ): PlaybackLibrary {
-  const [resume, setResume] = useState<Resume>({ status: media ? 'loading' : 'none' });
+  const [resume, setResume] = useState<Resume>(() =>
+    start ? { status: 'given', ...start } : { status: media ? 'loading' : 'none' },
+  );
+  /** Whether saved progress needs looking up; fixed for the hook's life. */
+  const [lookUp] = useState(start === undefined);
+  const [startPosition, setStartPosition] = useState(0);
   const [noticeVisible, setNoticeVisible] = useState(true);
   /** The viewer's answer when asked: resume (`true`) or start over. */
   const [answer, setAnswer] = useState<boolean | null>(null);
@@ -83,7 +97,7 @@ export function usePlaybackLibrary(
   // Look up saved progress for this video. A failed lookup only means
   // starting from the beginning.
   useEffect(() => {
-    if (!media) return;
+    if (!media || !lookUp) return;
     let active = true;
     libraryStore
       .getState()
@@ -101,13 +115,23 @@ export function usePlaybackLibrary(
     return () => {
       active = false;
     };
-  }, [media]);
+  }, [media, lookUp]);
 
   // Saving waits for the lookup, so early samples can't replace saved progress.
   useProgressRecorder(tracker, media, sample, resume.status !== 'loading');
 
   const takeStartPosition = useCallback(() => {
     const current = resumeRef.current;
+    if (current.status === 'given') {
+      const { position, resumed } = current;
+      setResume(resumed ? { status: 'resumed', position } : { status: 'none' });
+      if (position <= 0) return null;
+      setStartPosition(position);
+      // As when resuming, samples from before the start can't be saved; the
+      // position itself was saved by the stream this one replaces.
+      tracker.startAt(position, Date.now());
+      return position;
+    }
     if (current.status !== 'saved') return null;
     if (mode === 'never' || (mode === 'ask' && answer !== true)) {
       setResume({ status: 'none' });
@@ -116,6 +140,7 @@ export function usePlaybackLibrary(
     // Until playback reaches the saved position, ignore samples from before it.
     tracker.expectSeek(current.position, Date.now());
     setResume({ status: 'resumed', position: current.position });
+    setStartPosition(current.position);
     // Having just chosen to resume, there's no need to say so.
     if (mode === 'ask') setNoticeVisible(false);
     return current.position;
@@ -134,6 +159,7 @@ export function usePlaybackLibrary(
     asking: asking && resume.status === 'saved' ? resume.position : null,
     answer: setAnswer,
     takeStartPosition,
+    startPosition,
     resumedFrom: resume.status === 'resumed' && noticeVisible ? resume.position : null,
     startOver,
     dismissResumed,

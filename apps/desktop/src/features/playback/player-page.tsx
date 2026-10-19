@@ -11,6 +11,7 @@ import { clamp, cx, formatDuration } from '@kiro/utils';
 import {
   ArrowLeft,
   ChevronLeft,
+  Layers,
   Loader2,
   Maximize,
   Minimize,
@@ -52,6 +53,8 @@ import {
   type SkipSegment,
 } from '@/features/playback/chapter-skip';
 import { AutoSkippedNotice, SkipButton } from '@/features/playback/skip-button';
+import { fallbackNotice } from '@/features/playback/stream-fallback';
+import { StreamChoices, StreamsMenu } from '@/features/playback/stream-menu';
 import type { SubtitleSources, SubtitleSourcesState } from '@/features/playback/subtitle-sources';
 import { TimingMenu } from '@/features/playback/timing-menu';
 import { ControlButton, TracksMenu } from '@/features/playback/track-menu';
@@ -67,6 +70,7 @@ import {
   type TimingNotice,
 } from '@/features/playback/use-player-timing';
 import { useSkipParts } from '@/features/playback/use-skip-parts';
+import { useStreamSwitching, type StreamSwitching } from '@/features/playback/use-stream-switching';
 import { useSubtitleSources } from '@/features/playback/use-subtitle-sources';
 import { useUpNext } from '@/features/playback/use-up-next';
 import { useSettingsStore } from '@/features/settings/settings-store';
@@ -122,6 +126,8 @@ const IDLE_MS = 3000;
 const RESUMED_NOTICE_MS = 10_000;
 /** How long a notice such as "Subtitles +0.3 s" stays. */
 const TIMING_NOTICE_MS = 1500;
+/** How long "trying the next one (2 of 5)" stays once the stream plays. */
+const FALLBACK_NOTICE_MS = 4000;
 
 function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
@@ -243,6 +249,10 @@ function PlaybackSession({
   const [scrub, setScrub] = useState<number | null>(null);
   /** The source last loaded from the picker, to retry after a failure. */
   const [picked, setPicked] = useState<NetworkMediaSource | null>(null);
+  /** The requested stream couldn't be loaded at all (e.g. refused by the player). */
+  const [loadFailed, setLoadFailed] = useState(false);
+  /** The stream list shown with the error, to pick another stream. */
+  const [choosing, setChoosing] = useState(false);
 
   // A session replacing another one (Up next) starts while the player still
   // reports the previous stream; ignore that until this session's stream
@@ -279,8 +289,13 @@ function PlaybackSession({
           },
     [playbackState, position, duration],
   );
-  /** Saves progress for library titles and offers to resume. */
-  const library = usePlaybackLibrary(request?.media, sample);
+  /** Saves progress for library titles and offers to resume (unless switching streams). */
+  const handoff = request?.handoff;
+  const library = usePlaybackLibrary(
+    request?.media,
+    sample,
+    handoff && { position: handoff.startPosition, resumed: handoff.resumed },
+  );
   /** What can be skipped: the file's chapters, or times looked up online (Settings). */
   const lookUpSkipTimes = useSettingsStore(
     (state) => state.status === 'ready' && state.settings.playback.onlineSkipTimes,
@@ -312,6 +327,12 @@ function PlaybackSession({
     setPicked(next);
     run(player?.load(next));
   };
+  /** Opens the stream again after it failed. */
+  const retry = (next: NetworkMediaSource) => {
+    setLoadFailed(false);
+    setChoosing(false);
+    open(next);
+  };
 
   // Discord Rich Presence (Settings → General): the title, episode and
   // poster, never the stream. Rust clears it when the player closes.
@@ -337,11 +358,35 @@ function PlaybackSession({
         url: autoplayUrl,
         ...(startPosition !== null && { startPosition }),
       })
-      .catch((reason: unknown) => setError(errorMessage(reason)));
+      .catch((reason: unknown) => {
+        setError(errorMessage(reason));
+        setLoadFailed(true);
+      });
   }, [ready, player, autoplayUrl, libraryReady, takeStartPosition]);
 
   const state = view?.state ?? 'idle';
   const active = state === 'playing' || state === 'paused' || state === 'ended';
+  // The opening screen stays up until the first frame: mpv can report
+  // `playing` while it is still buffering the start of the stream.
+  const showingVideo = active && !(view?.buffering && (view.position ?? 0) < 0.5);
+  /** The first frame has shown: a failure from now on isn't a dead stream. */
+  const [started, setStarted] = useState(false);
+  if (showingVideo && !started) setStarted(true);
+  /** Falls back to the next stream when this one fails before playing; the Streams panel. */
+  const streams = useStreamSwitching(request, {
+    failedBeforeStart: !started && (state === 'error' || loadFailed),
+    started,
+    position: view?.position ?? null,
+    startPosition: library.startPosition,
+    resumed: library.resumedFrom !== null,
+  });
+  const fallbackAttempt = handoff?.reason === 'fallback' ? handoff.attempt : undefined;
+  const [fallbackNoticeDone, setFallbackNoticeDone] = useState(false);
+  useEffect(() => {
+    if (!showingVideo || !fallbackAttempt) return;
+    const timer = window.setTimeout(() => setFallbackNoticeDone(true), FALLBACK_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [showingVideo, fallbackAttempt]);
 
   // Controls (and the cursor) hide while playing without input, as in any
   // player, and when the cursor leaves the window. H hides or shows them.
@@ -520,13 +565,10 @@ function PlaybackSession({
   };
 
   const shownError = attachError ?? error;
-  const failed = state === 'error';
-  const opening = state === 'loading' || (request !== null && state === 'idle');
+  const failed = state === 'error' || loadFailed;
+  const opening = !failed && (state === 'loading' || (request !== null && state === 'idle'));
   /** Saved progress to ask about before opening (Resume playback: Ask). */
   const { asking, answer } = library;
-  // The opening screen stays up until the first frame: mpv can report
-  // `playing` while it is still buffering the start of the stream.
-  const showingVideo = active && !(view?.buffering && (view.position ?? 0) < 0.5);
   const artwork = request?.artwork;
   const upNextShown = Boolean(active && upNext?.visible);
   // Up next takes the place of Skip credits; the tracks panel opens there too.
@@ -611,20 +653,65 @@ function PlaybackSession({
         </div>
       </div>
 
-      {/* A requested stream failed */}
-      {request && failed && (
-        <div
+      {/* Moving on from a stream that didn't play */}
+      {fallbackAttempt && !fallbackNoticeDone && !failed && (
+        <p
+          role="status"
+          className="pointer-events-none absolute top-20 left-1/2 z-20 max-w-[80vw] -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-sm text-ink-100 backdrop-blur"
+        >
+          {fallbackNotice(fallbackAttempt)}
+        </p>
+      )}
+
+      {/* A requested stream failed: while another one is being found, nothing
+          to do; otherwise try again, or choose another stream */}
+      {request && failed && streams?.fallback === 'finding' && (
+        <p
+          role="status"
           className={cx(
-            'absolute left-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 text-sm text-ink-200',
+            'absolute left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-sm text-ink-200',
             artwork ? 'top-[62%]' : 'top-1/2',
           )}
         >
-          <p>Couldn’t play this stream.</p>
-          {source && (
-            <Button variant="secondary" size="sm" onClick={() => open(source)}>
-              <RotateCcw aria-hidden className="size-4" />
-              Try again
-            </Button>
+          <Loader2 aria-hidden className="size-4 animate-spin" />
+          That stream didn’t work, looking for another one…
+        </p>
+      )}
+      {request && failed && streams?.fallback !== 'finding' && (
+        <div
+          className={cx(
+            'absolute left-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 text-sm text-ink-200',
+            artwork && !choosing ? 'top-[62%]' : 'top-1/2',
+          )}
+        >
+          <p>
+            {streams && handoff?.reason !== 'picked' && streams.failed.length > 1
+              ? `Couldn’t play any of the ${streams.failed.length} streams tried.`
+              : 'Couldn’t play this stream.'}
+          </p>
+          <div className="flex gap-2">
+            {source && (
+              <Button variant="secondary" size="sm" onClick={() => retry(source)}>
+                <RotateCcw aria-hidden className="size-4" />
+                Try again
+              </Button>
+            )}
+            {streams && (
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-expanded={choosing}
+                onClick={() => setChoosing((value) => !value)}
+              >
+                <Layers aria-hidden className="size-4" />
+                Choose another stream
+              </Button>
+            )}
+          </div>
+          {streams && choosing && (
+            <div className="w-[min(32rem,90vw)] overflow-hidden rounded-2xl border border-white/10 bg-ink-900/90 shadow-2xl shadow-black/60 backdrop-blur-xl">
+              <StreamChoices streams={streams} />
+            </div>
           )}
         </div>
       )}
@@ -715,6 +802,7 @@ function PlaybackSession({
           fullscreen={fullscreen.active}
           onToggleFullscreen={toggleFullscreen}
           next={upNext && { label: upNext.label, play: upNext.playNow }}
+          streams={streams}
           seekStep={seekStep}
           segments={chapterSkip.segments}
           timing={timing}
@@ -774,6 +862,8 @@ interface ControlsProps {
   /** Parts that can be skipped, marked on the seek bar. */
   segments: SkipSegment[];
   timing: PlayerTiming;
+  /** The video's other streams, for a title's stream. */
+  streams: StreamSwitching | null;
 }
 
 function Controls({
@@ -792,6 +882,7 @@ function Controls({
   seekStep,
   segments,
   timing,
+  streams,
 }: ControlsProps) {
   const duration = view.duration ?? 0;
   const paused = view.state !== 'playing';
@@ -898,6 +989,7 @@ function Controls({
               <SkipForward aria-hidden className="size-5.5" />
             </ControlButton>
           )}
+          {streams && <StreamsMenu streams={streams} onOpenChange={onMenuOpenChange} />}
           <TracksMenu
             audioTracks={audioTracks}
             subtitleTracks={subtitleTracks}

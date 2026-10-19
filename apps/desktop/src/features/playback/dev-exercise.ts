@@ -42,6 +42,12 @@
  * stays playing, a few seconds apart, for checking what reaches Discord's
  * socket (the Rust log shows each change). Quitting then clears it.
  *
+ * `VITE_KIRO_SPIKE_EXERCISE=streams` (with `VITE_KIRO_SPIKE_AUTOPLAY` set to a
+ * dead link and `VITE_KIRO_SPIKE_MEDIA` to a title an installed addon has
+ * streams for) waits while the player falls back to a stream that plays,
+ * then picks another one in the Streams panel, which opens at the same
+ * position, and leaves. The Rust log shows each load and its start position.
+ *
  * `VITE_KIRO_SPIKE_EXERCISE=sources` instead loads a broken URL, the HLS test
  * stream, then `test5.mkv` near its end (start position, `ended`).
  */
@@ -123,6 +129,7 @@ export async function runDevExercise(
   }
   if (MODE === 'chapters') return exerciseChapters(player, navigate);
   if (MODE === 'smoke') return pauseOncePlaying(player);
+  if (MODE === 'streams') return exerciseStreams(player, navigate);
   if (MODE === 'timing') return exerciseTiming(player, navigate);
   if (MODE === 'awake') {
     const keepScreenOn = (on: boolean) =>
@@ -218,6 +225,22 @@ async function clickSkip(label: string, timeoutMs = 15_000) {
     await sleep(250);
   }
   console.warn(`[dev-exercise] no "${label}" button`);
+}
+
+async function exerciseStreams(player: NativePlayer, navigate: (to: string) => unknown) {
+  // The first stream fails; the player moves on by itself.
+  await waitForState(player, 'playing', 60_000);
+  await sleep(10_000);
+  document.querySelector<HTMLButtonElement>('button[aria-label="Streams"]')?.click();
+  await sleep(1000);
+  const options = document.querySelectorAll<HTMLButtonElement>(
+    '[role="dialog"][aria-label="Streams"] [role="radio"][aria-checked="false"]',
+  );
+  [...options].find((option) => !option.textContent?.includes('Didn’t play'))?.click();
+  await sleep(3000);
+  await waitForState(player, 'playing');
+  await sleep(10_000);
+  void navigate('/');
 }
 
 async function exerciseChapters(player: NativePlayer, navigate: (to: string) => unknown) {

@@ -6,6 +6,8 @@
  * transparent player page so the controls can be reviewed over a picture,
  * with a caption in the subtitle style from Settings while a subtitle track
  * is on. Like mpv, it keeps the delays and speed from one stream to the next.
+ * Stream URLs with `dead` in them fail to open, as a dead link does, and
+ * those with `drops` fail a few seconds after they start.
  */
 import type { Chapter, MediaTrack, PlaybackState } from '@kiro/player-core';
 
@@ -79,6 +81,10 @@ type Args = Record<string, unknown>;
 
 let channel: Channel | null = null;
 let clock: number | undefined;
+/** The pending end of opening a stream (or its failure). */
+let opening: number | undefined;
+/** When the stream playing fails, for `drops` URLs. */
+let dropAt: number | null = null;
 let state: PlaybackState = 'idle';
 let position = 0;
 let duration: number | null = null;
@@ -112,6 +118,10 @@ function setState(next: PlaybackState) {
     clock = window.setInterval(() => {
       position = Math.min(position + speed, DURATION);
       emit({ event: 'timeUpdate', payload: { position, duration } });
+      if (dropAt !== null && position >= dropAt) {
+        fail('The connection was lost');
+        return;
+      }
       if (position >= DURATION) {
         emit({ event: 'ended', payload: {} });
         setState('ended');
@@ -157,6 +167,14 @@ function showStill(on: boolean) {
   document.head.append(style);
 }
 
+/** Like mpv's failed `end-file`: an error, then the error state (which sticks). */
+function fail(message: string) {
+  dropAt = null;
+  showStill(false);
+  emit({ event: 'error', payload: { error: { code: 'NETWORK', message, recoverable: false } } });
+  setState('error');
+}
+
 function snapshot(): PlayerSnapshot {
   return {
     state,
@@ -198,19 +216,28 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
   },
   player_detach: () => {
     window.clearInterval(clock);
+    window.clearTimeout(opening);
     channel = null;
     state = 'idle';
     showStill(false);
   },
-  player_load: ({ startPosition }) => {
+  player_load: ({ url, startPosition }) => {
+    window.clearTimeout(opening);
     position = typeof startPosition === 'number' ? startPosition : 0;
     duration = null;
+    const source = new URL(String(url));
+    dropAt = source.searchParams.has('drops') ? position + 6 : null;
     if (chapters.length > 0) {
       chapters = [];
       emit({ event: 'chaptersChange', payload: { chapters } });
     }
     setState('loading');
-    window.setTimeout(() => {
+    if (source.searchParams.has('dead')) {
+      showStill(false);
+      opening = window.setTimeout(() => fail('Failed to open the stream (HTTP 404)'), 900);
+      return;
+    }
+    opening = window.setTimeout(() => {
       duration = DURATION;
       tracks = TRACKS;
       audioTrackId = 'a1';
@@ -240,6 +267,7 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
   // Discord Rich Presence lives in the core; nothing to imitate.
   player_set_now_playing: () => null,
   player_stop: () => {
+    window.clearTimeout(opening);
     showStill(false);
     setState('idle');
   },

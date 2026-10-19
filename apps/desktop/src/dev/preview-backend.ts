@@ -91,13 +91,30 @@ const SAMPLE_VIDEO =
 
 /**
  * Streams named the way Torrentio shows them through TorBox, in a scrambled
- * order so the ranking shows. Set `localStorage['kiro.preview.streams']` to
- * `unplayable` (only torrents and http links) or `none` to see Play fall
- * back to the list.
+ * order so the ranking shows. Each has its own URL; the preview player fails
+ * those with `dead` in them before they start, and those with `drops` after
+ * a few seconds of playback (`preview-player.ts`). A 480p one is always dead.
+ *
+ * Set `localStorage['kiro.preview.streams']` to:
+ * - `dead`: the two best streams are dead, so Play falls back twice (to the
+ *   same release first);
+ * - `all-dead`: every stream is dead, to see fallback give up;
+ * - `drops`: the best stream fails after it has started (no fallback);
+ * - `unplayable` (only torrents and http links) or `none`: Play shows the list.
  */
 function previewStreams() {
   const mode = readPreviewSetting('kiro.preview.streams');
   if (mode === 'none') return { streams: [] };
+  const dead = [
+    [
+      '[TB+] Preview\n4k HDR',
+      'Sample.2024.2160p.WEB-DL.DDP5.1.Atmos.HDR10.H.265-DEAD\n👤 311 💾 16.4 GB ⚙️ ThePirateBay',
+    ],
+    [
+      '[TB+] Preview\n4k HDR',
+      'Sample.2024.2160p.BluRay.DDP5.1.Atmos.HDR10.H.265-GONE\n👤 120 💾 17.0 GB ⚙️ 1337x',
+    ],
+  ] as const;
   const playable = [
     [
       '[TB download] Preview\n4k HDR',
@@ -112,6 +129,7 @@ function previewStreams() {
       'Sample.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX\n👤 214 💾 18.4 GB ⚙️ ThePirateBay',
     ],
     ['[TB+] Preview\n720p', 'Sample.2024.720p.WEBRip.x264.AAC\n👤 90 💾 1.9 GB ⚙️ YTS'],
+    ['[TB+] Preview\n480p', 'Sample.2024.480p.WEBRip.x264-DEAD\n👤 4 💾 700 MB ⚙️ YTS'],
     [
       '[TB+] Preview\n1080p',
       'Sample.2024.1080p.HDCAM.x264\n👤 12 💾 2.1 GB ⚙️ 1337x\nMulti Audio / 🇮🇹 / 🇪🇸',
@@ -137,8 +155,14 @@ function previewStreams() {
     streams: [
       ...(mode === 'unplayable'
         ? []
-        : playable.map(([name, title]) => ({
-            url: SAMPLE_VIDEO,
+        : [...(mode === 'dead' ? dead : []), ...playable].map(([name, title], index) => ({
+            url: `${SAMPLE_VIDEO}?preview=${index}${
+              mode === 'all-dead' || title.includes('-DEAD') || title.includes('-GONE')
+                ? '&dead'
+                : mode === 'drops' && name.includes('DV')
+                  ? '&drops'
+                  : ''
+            }`,
             name,
             title,
             behaviorHints: {
@@ -171,6 +195,7 @@ async function slowStreams() {
     await new Promise((resolve) => setTimeout(resolve, 20_000));
     throw commandError('ADDON_ERROR', 'The addon did not respond in time');
   }
+  const allDead = readPreviewSetting('kiro.preview.streams') === 'all-dead';
   const seconds = Number(setting ?? 10);
   await new Promise((resolve) =>
     setTimeout(resolve, (Number.isFinite(seconds) ? seconds : 10) * 1000),
@@ -187,8 +212,8 @@ async function slowStreams() {
           'Sample.2024.2160p.WEB-DL.DDP5.1.HDR.H.265-SLOW\n👤 8 💾 15.2 GB ⚙️ 1337x',
         ],
       ] as const
-    ).map(([name, title]) => ({
-      url: SAMPLE_VIDEO,
+    ).map(([name, title], index) => ({
+      url: `${SAMPLE_VIDEO}?slow=${index}${allDead ? '&dead' : ''}`,
       name,
       title,
       behaviorHints: { bingeGroup: `slow|${name.split('\n')[1] ?? ''}` },
