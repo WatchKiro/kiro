@@ -177,6 +177,9 @@ build_libplacebo() {
 }
 
 build_mpv() {
+  # Audio: Core Audio first, with AVFoundation (AVSampleBufferAudioRenderer)
+  # as mpv's fallback when Core Audio can't open the output device. Without
+  # the fallback such Macs get no sound at all, and mpv drops the audio track.
   rm -rf "$SRC/mpv/_build"
   meson setup "$SRC/mpv/_build" "$SRC/mpv" \
     --prefix="$DIST" --libdir=lib --buildtype=release \
@@ -191,7 +194,7 @@ build_mpv() {
     -Dmacos-cocoa-cb=disabled -Dmacos-media-player=disabled \
     -Dmacos-touchbar=disabled -Dcocoa=enabled -Dgl=enabled -Dgl-cocoa=enabled \
     -Dvideotoolbox-gl=enabled -Dcoreaudio=enabled -Daudiounit=disabled \
-    -Davfoundation=disabled -Dmanpage-build=disabled -Dhtml-build=disabled \
+    -Davfoundation=enabled -Dmanpage-build=disabled -Dhtml-build=disabled \
     -Dpdf-build=disabled
   meson compile -C "$SRC/mpv/_build" -j "$JOBS"
   meson install -C "$SRC/mpv/_build" --quiet
@@ -233,6 +236,10 @@ collect_licenses() {
 verify() {
   local dylib="$DIST/lib/libmpv.2.dylib" config="$SRC/mpv/_build/config.h"
   grep -q '^#define HAVE_GPL 0' "$config" || { echo "verify: mpv was built with GPL code" >&2; exit 1; }
+  for output in COREAUDIO AVFOUNDATION; do
+    grep -q "^#define HAVE_$output 1" "$config" \
+      || { echo "verify: mpv was built without its $output audio output" >&2; exit 1; }
+  done
   grep -Eq '^#define CONFIG_(GPL|NONFREE|VERSION3) 1' "$SRC/ffmpeg/config.h" \
     && { echo "verify: FFmpeg was built with GPL, v3 or non-free code" >&2; exit 1; }
   grep -q 'FFMPEG_LICENSE "LGPL version 2.1 or later"' "$SRC/ffmpeg/config.h" \

@@ -28,7 +28,7 @@ Requirements: Xcode, Node 24 and pnpm, Rust, and `brew install meson ninja pkg-c
 
 `apps/desktop/scripts/build-libmpv.sh` downloads pinned source releases, verifies their SHA-256 checksums (the same ones Homebrew verifies), and builds:
 
-- **mpv 0.41.0** with `-Dgpl=false`, as a library only (no `mpv` player). Lua, JavaScript, Vulkan, Blu-ray, DVD, CD audio and other optional features are off. Cocoa, OpenGL, VideoToolbox interop and Core Audio are on: the same playback path as development.
+- **mpv 0.41.0** with `-Dgpl=false`, as a library only (no `mpv` player). Lua, JavaScript, Vulkan, Blu-ray, DVD, CD audio and other optional features are off. Cocoa, OpenGL, VideoToolbox interop and both audio outputs (Core Audio, and AVFoundation as the fallback when Core Audio can't open the output device) are on: the same playback path as development.
 - **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect` so nothing optional is picked up from the build machine. HTTPS uses macOS's TLS (Secure Transport), so there is no OpenSSL. Hardware decoding uses VideoToolbox. AV1 is decoded by dav1d, since M1 and M2 have no AV1 hardware.
 - **Dependencies**, statically: libplacebo, libass (Core Text font provider, no fontconfig), FreeType, FriBidi, HarfBuzz and dav1d.
 
