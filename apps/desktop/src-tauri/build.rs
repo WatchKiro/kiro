@@ -103,6 +103,10 @@ fn main() {
             "stremio_import_fetch",
             "stremio_import_library",
             "stremio_import_discard",
+            "app_update_status",
+            "app_update_check",
+            "app_update_install",
+            "app_update_open_download",
             // libmpv player (only registered with `--features libmpv`).
             "player_attach",
             "player_detach",

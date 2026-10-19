@@ -2,15 +2,16 @@
 # by apps/desktop/scripts/build-libmpv-windows.sh, cached on the script's
 # hash), then the NSIS installer on Windows (`pnpm build:windows`). The
 # installer is installed on the runner and the app started from there, and
-# the playback smoke test runs against the same DLL. The DLL, its licences,
-# the installer and (for tags) the libmpv sources are kept as artifacts.
+# the playback smoke test runs against the same DLL. The DLL, its licences
+# and the installer are kept as artifacts. The release workflow
+# (release.yml) calls this with `release: true`, which also signs the
+# installer for Kiro's updater and keeps the libmpv sources.
 # See docs/releasing.md.
 name: Windows
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     paths:
       - apps/desktop/**
@@ -18,6 +19,16 @@ on:
       - .github/workflows/windows.yml
       - pnpm-lock.yaml
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: Build for a release (update signature, libmpv sources).
+        type: boolean
+        default: false
+    outputs:
+      signed:
+        description: Whether the installer is code signed.
+        value: ${{ jobs.installer.outputs.signed }}
 
 concurrency:
   group: windows-${{ github.ref }}
@@ -61,15 +72,22 @@ jobs:
           path: apps/desktop/.libmpv-windows/dist
           if-no-files-found: error
 
-      # LGPL: the exact sources of the bundled library, for the release.
+      # LGPL: the exact sources of the bundled library (not the compiler),
+      # with the build script and licences, for the release.
+      - name: libmpv sources
+        if: inputs.release
+        run: |
+          mkdir -p "$RUNNER_TEMP/libmpv-sources"
+          find apps/desktop/.libmpv-windows/downloads -maxdepth 1 -type f ! -name 'llvm-mingw-*' \
+            -exec cp {} "$RUNNER_TEMP/libmpv-sources/" \;
+          cp apps/desktop/scripts/build-libmpv-windows.sh "$RUNNER_TEMP/libmpv-sources/"
+          cp -R apps/desktop/.libmpv-windows/dist/licenses "$RUNNER_TEMP/libmpv-sources/"
+          ls -l "$RUNNER_TEMP/libmpv-sources"
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/tags/')
+        if: inputs.release
         with:
           name: libmpv-windows-sources
-          path: |
-            apps/desktop/.libmpv-windows/downloads
-            !apps/desktop/.libmpv-windows/downloads/llvm-mingw-*
-            apps/desktop/scripts/build-libmpv-windows.sh
+          path: ${{ runner.temp }}/libmpv-sources
           if-no-files-found: error
 
   installer:
@@ -77,7 +95,12 @@ jobs:
     needs: libmpv
     runs-on: windows-2025
     timeout-minutes: 75
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
     env:
+      # Releases: the installer is signed for Kiro's updater too (its .sig).
+      TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
       # Signing, when the repository has these secrets (scripts/sign-windows.mjs).
       AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
       AZURE_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
@@ -113,6 +136,16 @@ jobs:
         if: env.AZURE_ARTIFACT_SIGNING_ENDPOINT != ''
         run: cargo install artifact-signing-cli --version 0.11.0 --locked
 
+      - name: Signing
+        id: signing
+        shell: pwsh
+        run: |
+          $signed = [bool]($env:AZURE_ARTIFACT_SIGNING_ENDPOINT -or $env:WINDOWS_CERTIFICATE)
+          "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ('${{ inputs.release }}' -eq 'true' -and -not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw 'the TAURI_SIGNING_PRIVATE_KEY secret is missing (docs/releasing.md, Secrets)'
+          }
+
       - name: Build the installer
         run: pnpm build:windows
 
@@ -124,11 +157,17 @@ jobs:
           if (-not $installer) { throw "no installer in $bundle" }
           Write-Host "Built $($installer.Name) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
           "INSTALLER=$($installer.FullName)" >> $env:GITHUB_ENV
+          if ($env:TAURI_SIGNING_PRIVATE_KEY -and -not (Test-Path "$($installer.FullName).sig")) {
+            throw "no update signature for $($installer.Name)"
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: kiro-windows-installer
-          path: ${{ env.INSTALLER }}
+          # The update signature (.sig) is there for releases.
+          path: |
+            ${{ env.INSTALLER }}
+            ${{ env.INSTALLER }}.sig
           if-no-files-found: error
 
       # A per-user install needs no administrator: run it silently, check what

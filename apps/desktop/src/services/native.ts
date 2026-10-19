@@ -403,3 +403,31 @@ export const stremioCommands = {
     invoke<StremioLibrarySummary>('stremio_import_library', { choice }),
   discard: () => invoke<void>('stremio_import_discard'),
 };
+
+/**
+ * Where Kiro's own updating stands (`updates::UpdateStatus`). Release builds
+ * check at launch and once a day; development builds are `disabled`.
+ */
+export type UpdateStatus =
+  | { state: 'disabled' }
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'upToDate' }
+  | { state: 'downloading'; version: string }
+  /** Downloaded and verified: restarting installs it. */
+  | { state: 'ready'; version: string }
+  /** Newer, but this install can't apply it itself (the Linux .deb): download it. */
+  | { state: 'available'; version: string }
+  /** `message` is written for the user. */
+  | { state: 'failed'; message: string };
+
+/** Kiro updating itself (`commands::updates`). */
+export const updateCommands = {
+  status: () => invoke<UpdateStatus>('app_update_status'),
+  /** Checks now, and downloads a newer version this install can apply. */
+  check: () => invoke<UpdateStatus>('app_update_check'),
+  /** Installs the downloaded update and restarts Kiro (on Windows, the installer takes over). */
+  install: () => invoke<void>('app_update_install'),
+  /** Opens the release page of `version` in the browser. */
+  openDownload: (version: string) => invoke<void>('app_update_open_download', { version }),
+};

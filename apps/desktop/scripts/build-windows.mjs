@@ -7,7 +7,9 @@
 //
 // Signed when signing credentials are set (scripts/sign-windows.mjs: Azure
 // Artifact Signing or a .pfx certificate); otherwise unsigned, and
-// SmartScreen warns on first run. See docs/releasing.md.
+// SmartScreen warns on first run. With the updater's key
+// (TAURI_SIGNING_PRIVATE_KEY), the installer is also signed for updates (its
+// .sig). See docs/releasing.md.
 //
 // Usage: pnpm build:windows [extra `tauri build` arguments]
 import { spawnSync } from 'node:child_process';
@@ -41,6 +43,9 @@ for (const file of [join('bin', 'libmpv-2.dll'), join('licenses', 'README.txt')]
 }
 
 const configs = ['--config', join('src-tauri', 'tauri.windows-release.conf.json')];
+if (process.env.TAURI_SIGNING_PRIVATE_KEY) {
+  configs.push('--config', join('src-tauri', 'tauri.updater.conf.json'));
+}
 let method;
 try {
   method = signingMethod();

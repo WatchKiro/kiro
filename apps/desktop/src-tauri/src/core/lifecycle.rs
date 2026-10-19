@@ -9,5 +9,6 @@ use crate::storage::StoragePaths;
 pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Error>> {
     let storage = StoragePaths::resolve(app.handle())?;
     app.manage(AppState::new(storage));
+    crate::updates::start(app.handle());
     Ok(())
 }

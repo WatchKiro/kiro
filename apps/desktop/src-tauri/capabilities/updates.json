@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updates",
+  "description": "Kiro updating itself: where updating stands, checking now (Settings), installing an update the core has already downloaded and verified, and opening a Kiro release page on GitHub for installs that can't update themselves. The updater plugin's own commands are not granted: the core checks, downloads and installs (src/updates.rs).",
+  "windows": ["main"],
+  "permissions": [
+    "allow-app-update-status",
+    "allow-app-update-check",
+    "allow-app-update-install",
+    "allow-app-update-open-download"
+  ]
+}

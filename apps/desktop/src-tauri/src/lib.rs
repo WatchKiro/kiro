@@ -14,6 +14,7 @@
 //! - [`skip_times`] — intro and credits times looked up online (SkipDB)
 //! - [`storage`]  — local persistence locations and the SQLite database
 //! - [`stremio`]  — importing a Stremio account (addons, library, progress)
+//! - [`updates`]  — Kiro updating itself (release builds)
 
 pub mod addons;
 mod commands;
@@ -25,6 +26,7 @@ pub mod settings;
 pub mod skip_times;
 pub mod storage;
 pub mod stremio;
+pub mod updates;
 
 use tauri::{Builder, Runtime};
 
@@ -54,7 +56,10 @@ fn context<R: Runtime>() -> tauri::Context<R> {
 /// Configures the application. Generic over the runtime so the IPC tests can
 /// exercise the real command and permission setup on Tauri's mock runtime.
 fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
-    let builder = builder.setup(crate::core::lifecycle::setup);
+    let builder = builder
+        .setup(crate::core::lifecycle::setup)
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::Updates::default());
 
     // The libmpv player is only compiled in with `--features libmpv` on macOS,
     // Windows and Linux (`native_player`, set by build.rs).
@@ -88,6 +93,10 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             commands::stremio::stremio_import_fetch,
             commands::stremio::stremio_import_library,
             commands::stremio::stremio_import_discard,
+            commands::updates::app_update_status,
+            commands::updates::app_update_check,
+            commands::updates::app_update_install,
+            commands::updates::app_update_open_download,
             commands::player::player_attach,
             commands::player::player_detach,
             commands::player::player_load,
@@ -135,6 +144,10 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::stremio::stremio_import_fetch,
         commands::stremio::stremio_import_library,
         commands::stremio::stremio_import_discard,
+        commands::updates::app_update_status,
+        commands::updates::app_update_check,
+        commands::updates::app_update_install,
+        commands::updates::app_update_open_download,
     ]);
 
     builder
@@ -862,6 +875,41 @@ mod tests {
             "plugin:event|listen",
         ] {
             let error = app.invoke(cmd, label.clone()).unwrap_err();
+            assert!(is_permission_error(&error), "{cmd}: {error}");
+        }
+    }
+
+    #[test]
+    fn update_commands_are_allowed_and_off_in_development_builds() {
+        let app = TestApp::new("updates");
+        let call = |cmd: &str| -> Value {
+            app.invoke(cmd, json!({}))
+                .unwrap_or_else(|error| panic!("{cmd} should be permitted: {error}"))
+                .deserialize()
+                .unwrap()
+        };
+        assert_eq!(call("app_update_status"), json!({ "state": "disabled" }));
+        assert_eq!(call("app_update_check"), json!({ "state": "disabled" }));
+
+        let error = app.invoke("app_update_install", json!({})).unwrap_err();
+        assert!(!is_permission_error(&error), "{error}");
+        assert_eq!(error["code"], "INVALID_ARGUMENT", "{error}");
+        // Only a version number, never a URL, reaches the browser.
+        let error = app
+            .invoke(
+                "app_update_open_download",
+                json!({ "version": "https://evil.example/" }),
+            )
+            .unwrap_err();
+        assert!(!is_permission_error(&error), "{error}");
+        assert_eq!(error["code"], "INVALID_ARGUMENT", "{error}");
+
+        // The updater plugin's own commands stay with the core.
+        for cmd in [
+            "plugin:updater|check",
+            "plugin:updater|download_and_install",
+        ] {
+            let error = app.invoke(cmd, json!({})).unwrap_err();
             assert!(is_permission_error(&error), "{cmd}: {error}");
         }
     }

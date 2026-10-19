@@ -35,6 +35,14 @@ PREFIX="$ROOT/prefix" # static dependencies and headers, build-time only
 DIST="$ROOT/dist"     # what the app links against and bundles
 mkdir -p "$ROOT/downloads" "$SRC" "$PREFIX" "$DIST"
 
+# A finished, verified build of this exact script (CI restores one from its
+# cache) is used as it is.
+BUILD_ID="$(shasum -a 256 "$0" | cut -d' ' -f1)"
+if [[ -f "$DIST/lib/libmpv.2.dylib" && "$(cat "$DIST/.build-id" 2> /dev/null)" == "$BUILD_ID" ]]; then
+  echo "==> libmpv is up to date: $DIST/lib/libmpv.2.dylib"
+  exit 0
+fi
+
 # Matches tauri.conf.json `bundle.macOS.minimumSystemVersion`.
 export MACOSX_DEPLOYMENT_TARGET=12.0
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
@@ -262,3 +270,4 @@ step libplacebo build_libplacebo
 step mpv build_mpv
 collect_licenses
 verify
+echo "$BUILD_ID" > "$DIST/.build-id"

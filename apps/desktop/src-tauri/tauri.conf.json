@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "capabilities": ["default", "player", "stremio-import"],
+      "capabilities": ["default", "player", "stremio-import", "updates"],
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",
@@ -68,6 +68,14 @@
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlENTdEQkMzRTY0MUY3MzAKUldRdzkwSG13OXRYblZ4MVFEZFFkSkFnRUl4TEc2K3JDbDNiTWVYeGVDbFV1MDdna2JyWUhKOXUK",
+      "endpoints": ["https://github.com/WatchKiro/kiro/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
     }
   }
 }

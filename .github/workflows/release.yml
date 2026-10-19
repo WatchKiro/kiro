@@ -1,0 +1,291 @@
+# The release: pushing a version tag (`v0.2.0`, `v0.2.0-beta.1`) builds Kiro
+# for macOS, Windows and Linux and puts everything on a draft GitHub release:
+# the installers, the signed update bundles and `latest.json` for Kiro's
+# updater, the LGPL libmpv sources for each platform, and SHA256SUMS.
+# Publishing the draft (by hand, after a look) is the release; it also moves
+# the beta update feed (update-feed.yml). See docs/releasing.md.
+#
+# The Windows and Linux builds, with their install and playback tests, are
+# windows.yml and linux-packages.yml; macOS is built here. The macOS build
+# runs from a neutral folder and every asset is scanned for `/Users/` paths
+# before anything is uploaded (docs/releasing.md, Build paths).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Re-runs a release: choose the tag under "Use workflow from".
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag must name the version being built: apps/desktop/package.json
+      # (the app's version) and src-tauri/Cargo.toml must both say it.
+      - name: Tag and version
+        id: version
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            echo "::error::run this on a version tag (Use workflow from: Tags), not $GITHUB_REF_NAME"
+            exit 1
+          fi
+          version="$(jq -r .version apps/desktop/package.json)"
+          crate="$(sed -n 's/^version = "\(.*\)"$/\1/p' apps/desktop/src-tauri/Cargo.toml | head -n 1)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match apps/desktop/package.json ($version): set the version to ${GITHUB_REF_NAME#v} there and in apps/desktop/src-tauri/Cargo.toml, or tag v$version"
+            exit 1
+          fi
+          if [ "$crate" != "$version" ]; then
+            echo "::error::apps/desktop/src-tauri/Cargo.toml says $crate, package.json says $version: make them match"
+            exit 1
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$version isn't a version Kiro's updater can compare (x.y.z or x.y.z-beta.n)"
+            exit 1
+          fi
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::the TAURI_SIGNING_PRIVATE_KEY secret is missing (docs/releasing.md, Secrets)"
+            exit 1
+          fi
+          prerelease=false
+          [[ "$version" == *-* ]] && prerelease=true
+          echo "Kiro $version (pre-release: $prerelease)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS (Apple Silicon)
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
+    env:
+      # Compilers record where things were built (FFmpeg's and mpv's build
+      # details, Rust's panic locations): build in a folder that names no one.
+      # The runner's own home is /Users/runner, which the final scan rejects.
+      BUILD_DIR: /private/tmp/kiro-release
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Neutral build folder
+        run: |
+          mkdir -p "$BUILD_DIR"
+          rsync -a --exclude .git ./ "$BUILD_DIR/"
+
+      - name: libmpv cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /private/tmp/kiro-release/apps/desktop/.libmpv/dist
+            /private/tmp/kiro-release/apps/desktop/.libmpv/downloads
+          key: libmpv-macos-arm64-${{ hashFiles('apps/desktop/scripts/build-libmpv.sh') }}
+
+      - name: Build tools
+        run: |
+          brew install ninja pkgconf
+          pipx install meson==1.12.1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install
+        working-directory: ${{ env.BUILD_DIR }}
+        run: pnpm install --frozen-lockfile
+
+      # A Developer ID certificate, when the repository has one, goes into a
+      # temporary keychain for this job only.
+      - name: Signing
+        id: signing
+        env:
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret: signing ad hoc."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/kiro-signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$APPLE_SIGNING_IDENTITY"
+          if [ -z "$identity" ]; then
+            identity="$(security find-identity -v -p codesigning "$keychain" \
+              | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n 1)"
+          fi
+          if [ -z "$identity" ]; then
+            echo "::error::no Developer ID Application identity in APPLE_CERTIFICATE"
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        working-directory: ${{ env.BUILD_DIR }}
+        env:
+          # Tauri imports APPLE_CERTIFICATE itself when it's set; the keychain
+          # above already has it.
+          APPLE_CERTIFICATE: ''
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm build:mac
+
+      - name: Collect
+        working-directory: ${{ env.BUILD_DIR }}/apps/desktop/src-tauri/target/release/bundle
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          out="$RUNNER_TEMP/macos"
+          mkdir -p "$out"
+          cp dmg/*.dmg "$out/Kiro_${VERSION}_aarch64.dmg"
+          cp macos/Kiro.app.tar.gz "$out/Kiro_${VERSION}_aarch64.app.tar.gz"
+          cp macos/Kiro.app.tar.gz.sig "$out/Kiro_${VERSION}_aarch64.app.tar.gz.sig"
+          ls -l "$out"
+          codesign -dv --verbose=2 macos/Kiro.app 2>&1 | grep -E '^(Identifier|Authority|Signature|TeamIdentifier|Runtime)'
+          codesign --verify --deep --strict macos/Kiro.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiro-macos
+          path: ${{ runner.temp }}/macos
+          if-no-files-found: error
+
+      # LGPL: the exact sources libmpv was built from, with the build script
+      # and licences.
+      - name: libmpv sources
+        working-directory: ${{ env.BUILD_DIR }}/apps/desktop
+        run: |
+          mkdir -p "$RUNNER_TEMP/libmpv-sources"
+          cp .libmpv/downloads/* scripts/build-libmpv.sh "$RUNNER_TEMP/libmpv-sources/"
+          cp -R .libmpv/dist/licenses "$RUNNER_TEMP/libmpv-sources/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-macos-sources
+          path: ${{ runner.temp }}/libmpv-sources
+          if-no-files-found: error
+
+      - name: Remove the signing keychain
+        if: always() && env.KEYCHAIN != ''
+        run: security delete-keychain "$KEYCHAIN"
+
+  windows:
+    name: Windows
+    needs: version
+    uses: ./.github/workflows/windows.yml
+    with:
+      release: true
+    secrets: inherit
+
+  linux:
+    name: Linux
+    needs: version
+    uses: ./.github/workflows/linux-packages.yml
+    with:
+      release: true
+    secrets: inherit
+
+  release:
+    name: Draft release
+    needs: [version, macos, windows, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Each into artifacts/<name>/.
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+          pattern: kiro-*
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+          pattern: libmpv-*-sources
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools p7zip-full
+
+      - name: Assets
+        run: .github/scripts/release-assets.sh "$VERSION" "$TAG" "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/assets"
+
+      - name: Release notes
+        env:
+          MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+          WINDOWS_SIGNED: ${{ needs.windows.outputs.signed }}
+        run: .github/scripts/release-notes.sh "$VERSION" "$TAG" > "$RUNNER_TEMP/notes.md"
+
+      # The last check before anything is uploaded: no asset, or anything
+      # inside one, may name a macOS home folder (docs/releasing.md, Build
+      # paths). The maintainer publishes anonymously.
+      - name: Privacy check (no /Users/ paths)
+        run: .github/scripts/scan-release.sh "$RUNNER_TEMP/assets" "$RUNNER_TEMP/notes.md"
+
+      - name: Draft release
+        run: |
+          if existing="$(gh release view "$TAG" --json isDraft -q .isDraft 2> /dev/null)"; then
+            if [ "$existing" != true ]; then
+              echo "::error::$TAG is already published; tag a new version instead"
+              exit 1
+            fi
+            echo "Replacing the existing draft for $TAG"
+            gh release delete "$TAG" --yes
+          fi
+          title="Kiro ${VERSION/-beta./ beta }"
+          flags=(--draft --verify-tag --title "$title" --notes-file "$RUNNER_TEMP/notes.md")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); fi
+          gh release create "$TAG" "${flags[@]}" "$RUNNER_TEMP"/assets/*
+          {
+            echo "### Draft release ready: $title"
+            echo
+            echo "Review it at $(gh release view "$TAG" --json url -q .url), then publish it."
+            echo
+            echo '```'
+            (cd "$RUNNER_TEMP/assets" && ls -l)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

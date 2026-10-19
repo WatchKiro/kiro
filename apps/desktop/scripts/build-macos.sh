@@ -4,7 +4,8 @@
 #
 # Signed ad hoc unless APPLE_SIGNING_IDENTITY names a Developer ID
 # certificate; set APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID as well to
-# notarise. See docs/releasing.md.
+# notarise. With the updater's key (TAURI_SIGNING_PRIVATE_KEY), also builds
+# the signed update bundle, Kiro.app.tar.gz. See docs/releasing.md.
 set -euo pipefail
 
 DESKTOP="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,6 +18,9 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   # runtime, but an ad hoc build can't be notarised anyway.
   echo "build-macos: no APPLE_SIGNING_IDENTITY, signing ad hoc (runs on this Mac; others need System Settings > Privacy & Security > Open Anyway)"
   configs+=(--config '{"bundle":{"macOS":{"hardenedRuntime":false}}}')
+fi
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  configs+=(--config src-tauri/tauri.updater.conf.json)
 fi
 
 # Release binaries embed source paths (Rust's panic locations, for the app

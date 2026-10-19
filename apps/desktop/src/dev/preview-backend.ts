@@ -20,7 +20,9 @@
  *   The library's "mark as watched" threshold follows them, and window
  *   fullscreen uses the page's Fullscreen API;
  * - SkipDB lookups (`skip_times_lookup`) answer with made-up times for the
- *   imitated file, or none, another release's, a failure or a slow reply.
+ *   imitated file, or none, another release's, a failure or a slow reply;
+ * - updating (`app_update_*`) finds a made-up Kiro 0.2.0 when checked, or
+ *   nothing, a failure, or one that can only be downloaded.
  *
  * Nothing else is persisted: reloading starts again from the seed. `main.tsx`
  * loads this module behind `import.meta.env.DEV`, so production builds leave
@@ -40,6 +42,7 @@ import type {
   LibraryVideo,
   PlaybackProgress,
   Settings,
+  UpdateStatus,
   WatchlistItem,
 } from '@/services/native';
 
@@ -698,6 +701,50 @@ const windowHandlers: Record<string, (args: Args) => unknown> = {
 };
 
 // ---------------------------------------------------------------------------
+// Updating Kiro
+// ---------------------------------------------------------------------------
+
+/**
+ * `app_update_*`: checking finds Kiro 0.2.0 and "downloads" it.
+ * `localStorage['kiro.preview.update']`: `ready` (downloaded at launch, so
+ * the sidebar offers it), `none` (up to date), `error`, or `deb` (an install
+ * that can't update itself).
+ */
+let updateStatus: UpdateStatus =
+  readPreviewSetting('kiro.preview.update') === 'ready'
+    ? { state: 'ready', version: '0.2.0' }
+    : { state: 'idle' };
+
+const updateHandlers: Record<string, (args: Args) => unknown> = {
+  app_update_status: () => updateStatus,
+  app_update_check: async () => {
+    const mode = readPreviewSetting('kiro.preview.update');
+    if (updateStatus.state === 'ready') return updateStatus;
+    updateStatus = { state: 'checking' };
+    await delay(900);
+    if (mode === 'none') updateStatus = { state: 'upToDate' };
+    else if (mode === 'error') {
+      updateStatus = {
+        state: 'failed',
+        message: 'Couldn’t check for updates. Check your connection and try again.',
+      };
+    } else if (mode === 'deb') updateStatus = { state: 'available', version: '0.2.0' };
+    else {
+      updateStatus = { state: 'downloading', version: '0.2.0' };
+      await delay(1500);
+      updateStatus = { state: 'ready', version: '0.2.0' };
+    }
+    return updateStatus;
+  },
+  app_update_install: () => {
+    window.location.reload();
+  },
+  app_update_open_download: ({ version }) => {
+    window.open(`https://github.com/WatchKiro/kiro/releases/tag/v${String(version)}`, '_blank');
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Import from Stremio
 // ---------------------------------------------------------------------------
 
@@ -765,6 +812,7 @@ const stremioHandlers: Record<string, (args: Args) => unknown> = {
 
 const handlers: Record<string, (args: Args) => unknown> = {
   ...stremioHandlers,
+  ...updateHandlers,
   ...playerHandlers,
   ...windowHandlers,
   app_info: () => APP_INFO,

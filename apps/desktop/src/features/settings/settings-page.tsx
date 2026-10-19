@@ -45,6 +45,7 @@ import {
 import { useSettingsStore } from '@/features/settings/settings-store';
 import { StremioImportSection } from '@/features/stremio-import/stremio-import-section';
 import { SubtitlePreview } from '@/features/settings/subtitle-preview';
+import { describeUpdate, offeredVersion, useUpdateStore } from '@/features/updates/update-store';
 import { useAppInfo } from '@/hooks/use-app-info';
 import { formatOs } from '@/lib/platform';
 import { isNativeRuntime } from '@/services/native';
@@ -103,7 +104,7 @@ function useEditable() {
   return useSettingsStore((state) => state.status === 'ready');
 }
 
-/** Kiro as a whole: what it shares outside the app (Discord). */
+/** Kiro as a whole: its version and updates, and what it shares outside the app (Discord). */
 function GeneralSection() {
   const editable = useEditable();
   const settings = useSettingsStore((state) => state.settings);
@@ -121,11 +122,12 @@ function GeneralSection() {
     <Section
       id="general"
       title="General"
-      description="What Kiro shares outside the app."
+      description="Updates, and what Kiro shares outside the app."
       onReset={() => void reset('general')}
       resetDisabled={!editable || !isChanged(settings, 'general')}
     >
       <div className="divide-y divide-white/[0.05]">
+        <UpdatesSetting version={appInfo.status === 'ready' ? appInfo.info.version : null} />
         <ToggleSetting
           label="Show what I’m watching on Discord"
           hint={
@@ -171,6 +173,61 @@ function GeneralSection() {
         )}
       </div>
     </Section>
+  );
+}
+
+/**
+ * The running version and Check for updates. Once a new version is
+ * downloaded, the button restarts into it (or, for installs that can't update
+ * themselves, opens its download page), as the sidebar's prompt does.
+ */
+function UpdatesSetting({ version }: { version: string | null }) {
+  const labelId = useId();
+  const status = useUpdateStore((state) => state.status);
+  const error = useUpdateStore((state) => state.error);
+  const check = useUpdateStore((state) => state.check);
+  const install = useUpdateStore((state) => state.install);
+  const openDownload = useUpdateStore((state) => state.openDownload);
+  const offered = offeredVersion(status);
+  const busy = status?.state === 'checking' || status?.state === 'downloading';
+
+  return (
+    <SettingRow
+      label="Updates"
+      hint="Kiro looks for a new version when it starts and once a day, and downloads it in the background. Restart when it’s ready."
+      labelId={labelId}
+    >
+      <div className="flex flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div aria-live="polite" className="min-w-0">
+          <p className="text-sm font-medium text-ink-100 tabular-nums">
+            {version ? `Kiro ${version}` : 'Kiro'}
+          </p>
+          <p className="text-xs leading-relaxed text-ink-400">{error ?? describeUpdate(status)}</p>
+        </div>
+        {status?.state === 'ready' ? (
+          <Button size="sm" onClick={() => void install()}>
+            Restart to update
+          </Button>
+        ) : status?.state === 'available' && offered ? (
+          <Button size="sm" variant="secondary" onClick={() => void openDownload()}>
+            Download Kiro {offered}
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!status || status.state === 'disabled' || busy}
+            onClick={() => void check()}
+          >
+            {status?.state === 'downloading'
+              ? 'Downloading…'
+              : busy
+                ? 'Checking…'
+                : 'Check for updates'}
+          </Button>
+        )}
+      </div>
+    </SettingRow>
   );
 }
 

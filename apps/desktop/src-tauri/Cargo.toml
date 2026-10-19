@@ -54,11 +54,19 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Library database (watchlist, watch history). SQLite is compiled in so every
 # platform gets the same, current version.
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+# Version numbers: which update feed a build follows (src/updates.rs).
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2.12", features = [] }
 thiserror = "2"
 url = "2"
+# Kiro updating itself (src/updates.rs): checks, downloads and verifies
+# signed updates. rustls with ring like the addon transport, no system proxy,
+# and no zip support (the update bundles are .app.tar.gz, the NSIS installer
+# and the AppImage). Pinned: what the updater installs, and how, was reviewed
+# at this version.
+tauri-plugin-updater = { version = "=2.13.1", default-features = false, features = ["rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

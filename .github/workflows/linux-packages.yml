@@ -3,7 +3,8 @@
 # on clean Ubuntu 22.04 and 24.04 containers and runs the playback smoke test
 # (apps/desktop/scripts/playback-smoke.mjs --app) against the installed app.
 # Packages, libmpv's sources and the test screenshots are kept as artifacts.
-# See docs/releasing.md.
+# The release workflow (release.yml) calls this with `release: true`, which
+# also signs the AppImage for Kiro's updater. See docs/releasing.md.
 name: Linux packages
 
 on:
@@ -21,6 +22,12 @@ on:
       - .github/workflows/linux-packages.yml
       - pnpm-lock.yaml
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: Build for a release (the AppImage's update signature).
+        type: boolean
+        default: false
 
 concurrency:
   group: linux-packages-${{ github.ref }}
@@ -35,6 +42,10 @@ jobs:
     # The oldest supported base, so the packages run on everything newer.
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    env:
+      # Releases: the AppImage is signed for Kiro's updater too (its .sig).
+      TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,13 +87,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Packages
-        run: pnpm build:linux
+        run: |
+          if [ "${{ inputs.release }}" = true ] && [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::the TAURI_SIGNING_PRIVATE_KEY secret is missing (docs/releasing.md, Secrets)"
+            exit 1
+          fi
+          pnpm build:linux
 
       - name: Inspect
         working-directory: apps/desktop/src-tauri/target/release/bundle
         run: |
           mkdir -p "$RUNNER_TEMP/packages"
           cp deb/*.deb appimage/*.AppImage "$RUNNER_TEMP/packages/"
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then cp appimage/*.AppImage.sig "$RUNNER_TEMP/packages/"; fi
           ls -l "$RUNNER_TEMP/packages"
           deb="$(ls deb/*.deb)"
           dpkg-deb --info "$deb"

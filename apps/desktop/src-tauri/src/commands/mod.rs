@@ -18,3 +18,4 @@ pub mod player;
 pub mod settings;
 pub mod skip_times;
 pub mod stremio;
+pub mod updates;

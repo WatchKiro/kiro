@@ -1,0 +1,68 @@
+# The beta update feed. Beta builds of Kiro (versions like 0.2.0-beta.1)
+# read `beta.json` from the `updater` release, since GitHub's "latest
+# release" skips pre-releases. When a release is published, its latest.json
+# becomes beta.json, unless the feed already offers a newer version. Stable
+# builds read the latest stable release's own latest.json and need nothing
+# from here. See docs/releasing.md, Auto-update.
+name: Update feed
+
+on:
+  release:
+    types: [published]
+  # Points the feed at a published release by hand (e.g. back to an older
+  # one after pulling a broken release).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release to offer to beta builds (e.g. v0.2.0-beta.1)
+        required: true
+
+concurrency:
+  group: update-feed
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  feed:
+    name: beta.json
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      FORCE: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Update the feed
+        run: |
+          case "$TAG" in v*) ;; *) echo "$TAG isn't a Kiro version; nothing to do"; exit 0 ;; esac
+          if [ "$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)" = true ]; then
+            echo "::error::$TAG isn't published"
+            exit 1
+          fi
+          mkdir -p feed && cd feed
+          if ! gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json; then
+            echo "$TAG has no latest.json (released before Kiro updated itself); nothing to do"
+            exit 0
+          fi
+          new="$(jq -r .version latest.json)"
+          [ "v$new" = "$TAG" ] || { echo "::error::$TAG's latest.json is for $new"; exit 1; }
+
+          if ! gh release view updater -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create updater -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "Update feed" \
+              --notes "Not a release. This holds \`beta.json\`, which beta versions of Kiro read to find updates. Download Kiro from the releases listed with a version number."
+          fi
+          if [ "$FORCE" != true ] && gh release download updater -R "$GITHUB_REPOSITORY" -p beta.json -O current.json 2> /dev/null; then
+            current="$(jq -r .version current.json)"
+            # sort -V puts 0.2.0-beta.1 after 0.2.0; compare with the
+            # pre-release ordered first, as semver does.
+            newest="$(printf '%s\n%s\n' "$current" "$new" | sed 's/-/~/' | sort -V | tail -n 1 | sed 's/~/-/')"
+            if [ "$current" = "$new" ] || [ "$newest" != "$new" ]; then
+              echo "The feed already offers $current; leaving it"
+              exit 0
+            fi
+          fi
+          cp latest.json beta.json
+          gh release upload updater -R "$GITHUB_REPOSITORY" beta.json --clobber
+          echo "Beta builds are now offered Kiro $new" | tee -a "$GITHUB_STEP_SUMMARY"
