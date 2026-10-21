@@ -74,6 +74,12 @@ export interface PlayerStats {
   fps: number | null;
   droppedFrames: number;
   cacheSeconds: number | null;
+  /** The audio track's codec, e.g. `eac3`. */
+  audioCodec: string | null;
+  /** `passthrough eac3` (sent to the receiver untouched) or `decoded`; `null` without audio. */
+  audioMode: string | null;
+  /** mpv's audio output, e.g. `coreaudio`, `coreaudio_exclusive`, `wasapi`. */
+  audioOutput: string | null;
   framesRendered: number;
   samplePixel: string;
   contentsScale: number;

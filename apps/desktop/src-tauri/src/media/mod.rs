@@ -16,6 +16,7 @@ pub mod keep_awake;
 pub mod model;
 #[cfg(native_player)]
 pub mod mpv;
+pub mod passthrough;
 
 use std::path::PathBuf;
 

@@ -770,7 +770,7 @@ mod tests {
                 "skipIntros": false, "onlineSkipTimes": false,
                 "autoplayNext": true, "upNextSeconds": 10, "seekSeconds": 10, "resume": "always",
                 "rememberVolume": true, "volume": 100, "markWatchedPercent": 90,
-                "keepScreenOn": true,
+                "keepScreenOn": true, "audioPassthrough": false, "passthroughFormats": ["ac3", "dts"],
             },
             "subtitles": {
                 "size": 100, "color": "#ffffff", "edge": "outline", "offset": 0,
@@ -791,6 +791,8 @@ mod tests {
         settings["playback"]["onlineSkipTimes"] = json!(true);
         settings["general"]["discordPresence"] = json!(true);
         settings["general"]["discordShowEpisode"] = json!(false);
+        settings["playback"]["audioPassthrough"] = json!(true);
+        settings["playback"]["passthroughFormats"] = json!(["dts"]);
         settings["subtitles"]["edge"] = json!("background");
         settings["streams"]["maxResolution"] = json!(1080);
         settings["streams"]["avoidCodecs"] = json!(["av1"]);
@@ -822,6 +824,9 @@ mod tests {
             ("streams", "maxResolution", json!(4320)),
             ("playback", "markWatchedPercent", json!(99)),
             ("playback", "resume", json!("sometimes")),
+            ("playback", "passthroughFormats", json!(["mp3"])),
+            ("playback", "passthroughFormats", json!(["ac3", "ac3"])),
+            ("playback", "passthroughFormats", json!(["dtsHd"])),
             ("subtitles", "color", json!("url(x)")),
             ("streams", "excludedKeywords", json!(["ok", "OK"])),
             (

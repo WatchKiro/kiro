@@ -9,14 +9,17 @@ import {
   MAX_LANGUAGES,
   isChanged,
   isHexColor,
+  isPassthroughAvailable,
   isValidLanguageList,
   languageLabel,
   normalizeKeyword,
   normalizeKeywords,
   normalizeLanguages,
+  normalizePassthroughFormats,
   parseSettings,
   withDefaults,
   withGeneral,
+  withPassthroughFormat,
   withPlayback,
   withStreams,
   withSubtitles,
@@ -44,6 +47,8 @@ describe('parseSettings', () => {
       volume: 45,
       markWatchedPercent: 80,
       keepScreenOn: false,
+      audioPassthrough: true,
+      passthroughFormats: ['eac3', 'dts', 'dtsHd'],
     },
     subtitles: {
       size: 150,
@@ -304,5 +309,67 @@ describe('withPlayback limits', () => {
     );
     assert.equal(withPlayback(DEFAULT_SETTINGS, { volume: 64.6 }).playback.volume, 65);
     assert.equal(withPlayback(DEFAULT_SETTINGS, { volume: 200 }).playback.volume, 100);
+  });
+});
+
+describe('audio passthrough', () => {
+  it('is off, with the formats every receiver takes', () => {
+    assert.equal(DEFAULT_SETTINGS.playback.audioPassthrough, false);
+    assert.deepEqual(DEFAULT_SETTINGS.playback.passthroughFormats, ['ac3', 'dts']);
+  });
+
+  it('reads stored formats as the core keeps them', () => {
+    const read = (passthroughFormats: unknown) =>
+      parseSettings({ playback: { audioPassthrough: true, passthroughFormats } }).playback;
+    assert.deepEqual(read(['truehd', 'mp3', 7, 'ac3', 'ac3']).passthroughFormats, [
+      'ac3',
+      'truehd',
+    ]);
+    // DTS-HD needs DTS.
+    assert.deepEqual(read(['dtsHd', 'eac3']).passthroughFormats, ['eac3']);
+    assert.deepEqual(read([]).passthroughFormats, []);
+    assert.deepEqual(read('ac3').passthroughFormats, ['ac3', 'dts']);
+    assert.equal(read(['ac3']).audioPassthrough, true);
+    assert.equal(
+      parseSettings({ playback: { audioPassthrough: 'yes' } }).playback.audioPassthrough,
+      false,
+    );
+  });
+
+  it('keeps DTS-HD and DTS together when toggling', () => {
+    assert.deepEqual(withPassthroughFormat(['ac3'], 'dtsHd', true), ['ac3', 'dts', 'dtsHd']);
+    assert.deepEqual(withPassthroughFormat(['ac3', 'dts', 'dtsHd'], 'dts', false), ['ac3']);
+    assert.deepEqual(withPassthroughFormat(['ac3', 'dts', 'dtsHd'], 'dtsHd', false), [
+      'ac3',
+      'dts',
+    ]);
+    assert.deepEqual(withPassthroughFormat(['dts'], 'eac3', true), ['eac3', 'dts']);
+    assert.deepEqual(withPassthroughFormat(['dts'], 'dts', true), ['dts']);
+    assert.deepEqual(normalizePassthroughFormats(['truehd', 'dts', 'ac3']), [
+      'ac3',
+      'dts',
+      'truehd',
+    ]);
+  });
+
+  it('greys out what a Mac can’t send', () => {
+    const available = (os: string | null) =>
+      (['ac3', 'eac3', 'dts', 'dtsHd', 'truehd'] as const).filter((format) =>
+        isPassthroughAvailable(format, os),
+      );
+    assert.deepEqual(available('macos'), ['ac3', 'dts']);
+    assert.deepEqual(available('windows'), ['ac3', 'eac3', 'dts', 'dtsHd', 'truehd']);
+    assert.deepEqual(available('linux'), ['ac3', 'eac3', 'dts', 'dtsHd', 'truehd']);
+    assert.deepEqual(available(null), ['ac3', 'eac3', 'dts', 'dtsHd', 'truehd']);
+  });
+
+  it('saves through withPlayback', () => {
+    const settings = withPlayback(DEFAULT_SETTINGS, {
+      audioPassthrough: true,
+      passthroughFormats: ['dtsHd', 'ac3'],
+    });
+    assert.equal(settings.playback.audioPassthrough, true);
+    assert.deepEqual(settings.playback.passthroughFormats, ['ac3']);
+    assert.ok(isChanged(settings, 'playback'));
   });
 });

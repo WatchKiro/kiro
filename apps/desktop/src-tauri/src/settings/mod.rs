@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::error::{Error, Result};
+use crate::media::passthrough::{self, PassthroughFormat};
 use crate::media::{
     MAX_SUBTITLE_OFFSET, SUBTITLE_SIZES, SubtitleEdge, SubtitleStyle, is_hex_color,
 };
@@ -154,6 +155,12 @@ pub struct PlaybackSettings {
     /// Keep the display awake (no screensaver or display sleep) while a
     /// video plays.
     pub keep_screen_on: bool,
+    /// Send [`Self::passthrough_formats`] to an AV receiver untouched
+    /// (`crate::media::passthrough`) instead of decoding them.
+    pub audio_passthrough: bool,
+    /// The formats passed through while [`Self::audio_passthrough`] is on:
+    /// distinct, each supported on this platform, DTS-HD only with DTS.
+    pub passthrough_formats: Vec<PassthroughFormat>,
 }
 
 impl Default for PlaybackSettings {
@@ -172,6 +179,8 @@ impl Default for PlaybackSettings {
             volume: 100,
             mark_watched_percent: 90,
             keep_screen_on: true,
+            audio_passthrough: false,
+            passthrough_formats: PassthroughFormat::DEFAULTS.to_vec(),
         }
     }
 }
@@ -455,7 +464,13 @@ impl PlaybackSettings {
                 WATCHED_PERCENT.end()
             )));
         }
-        Ok(())
+        validate_passthrough_formats(&self.passthrough_formats)
+    }
+
+    /// mpv's `audio-spdif`: what is passed through, or empty to decode
+    /// everything.
+    pub fn audio_spdif(&self) -> String {
+        passthrough::spdif_codecs(self.audio_passthrough, &self.passthrough_formats)
     }
 
     /// Watched this fraction of a video: finished. Clamped to
@@ -503,7 +518,63 @@ impl PlaybackSettings {
                 .filter(|percent| WATCHED_PERCENT.contains(percent))
                 .unwrap_or(defaults.mark_watched_percent),
             keep_screen_on: flag("keepScreenOn", defaults.keep_screen_on),
+            audio_passthrough: flag("audioPassthrough", defaults.audio_passthrough),
+            passthrough_formats: value
+                .get("passthroughFormats")
+                .and_then(Value::as_array)
+                .map_or(defaults.passthrough_formats, |stored| {
+                    stored_passthrough_formats(stored)
+                }),
         }
+    }
+}
+
+/// Passthrough formats must be distinct and work on this platform, and
+/// DTS-HD comes with DTS (mpv's `dts-hd` passes DTS cores through too, so
+/// DTS-HD alone would say DTS is decoded when it isn't).
+fn validate_passthrough_formats(formats: &[PassthroughFormat]) -> Result<()> {
+    if has_duplicates(formats) {
+        return Err(Error::invalid_argument("Duplicate passthrough format"));
+    }
+    if let Some(format) = formats.iter().find(|format| !format.is_supported()) {
+        return Err(Error::invalid_argument(format!(
+            "{} passthrough isn't available on {}",
+            format.label(),
+            os_name()
+        )));
+    }
+    if formats.contains(&PassthroughFormat::DtsHd) && !formats.contains(&PassthroughFormat::Dts) {
+        return Err(Error::invalid_argument(
+            "DTS-HD passthrough needs DTS passthrough on",
+        ));
+    }
+    Ok(())
+}
+
+/// Stored passthrough formats, keeping the valid ones: known, distinct,
+/// supported here, and DTS-HD only with DTS.
+fn stored_passthrough_formats(stored: &[Value]) -> Vec<PassthroughFormat> {
+    let mut formats = Vec::new();
+    for format in stored {
+        if let Ok(format) = serde_json::from_value::<PassthroughFormat>(format.clone())
+            && format.is_supported()
+            && !formats.contains(&format)
+        {
+            formats.push(format);
+        }
+    }
+    if !formats.contains(&PassthroughFormat::Dts) {
+        formats.retain(|format| *format != PassthroughFormat::DtsHd);
+    }
+    formats
+}
+
+fn os_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
     }
 }
 
@@ -680,6 +751,8 @@ mod tests {
                 skip_intros: true,
                 online_skip_times: true,
                 keep_screen_on: false,
+                audio_passthrough: true,
+                passthrough_formats: vec![PassthroughFormat::Dts],
             },
             subtitles: SubtitleSettings {
                 size: 150,
@@ -884,6 +957,106 @@ mod tests {
         assert_eq!(stored["subtitles"]["preferredType"], "sdh");
         assert_eq!(stored["streams"]["avoidCodecs"], json!(["av1", "hevc"]));
         assert_eq!(stored["streams"]["maxSizeGb"], 20);
+        assert_eq!(stored["playback"]["audioPassthrough"], true);
+        assert_eq!(stored["playback"]["passthroughFormats"], json!(["dts"]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn passthrough_is_off_with_the_formats_every_receiver_takes() {
+        let playback = PlaybackSettings::default();
+        assert!(!playback.audio_passthrough);
+        assert_eq!(
+            playback.passthrough_formats,
+            [PassthroughFormat::Ac3, PassthroughFormat::Dts]
+        );
+        assert_eq!(playback.audio_spdif(), "");
+    }
+
+    #[test]
+    fn passthrough_maps_to_mpvs_audio_spdif() {
+        let mut playback = PlaybackSettings {
+            audio_passthrough: true,
+            ..PlaybackSettings::default()
+        };
+        assert_eq!(playback.audio_spdif(), "ac3,dts");
+        playback.passthrough_formats = vec![PassthroughFormat::Dts];
+        assert_eq!(playback.audio_spdif(), "dts");
+        playback.passthrough_formats = Vec::new();
+        assert_eq!(playback.audio_spdif(), "");
+        if !cfg!(target_os = "macos") {
+            playback.passthrough_formats = PassthroughFormat::ALL.to_vec();
+            assert_eq!(playback.audio_spdif(), "ac3,eac3,dts,dts-hd,truehd");
+            // Off: everything is decoded, whatever is chosen.
+            playback.audio_passthrough = false;
+            assert_eq!(playback.audio_spdif(), "");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_passthrough_formats() {
+        use PassthroughFormat::*;
+        let store = SettingsStore::new(&temp_dir());
+        let with = |formats: &[PassthroughFormat]| Settings {
+            playback: PlaybackSettings {
+                audio_passthrough: true,
+                passthrough_formats: formats.to_vec(),
+                ..PlaybackSettings::default()
+            },
+            ..Settings::default()
+        };
+        let mut invalid = vec![with(&[Ac3, Ac3]), with(&[DtsHd]), with(&[Ac3, DtsHd])];
+        if cfg!(target_os = "macos") {
+            // Greyed out in Settings on a Mac.
+            invalid.extend([with(&[Eac3]), with(&[TrueHd]), with(&[Dts, DtsHd])]);
+        } else {
+            store.set(with(&PassthroughFormat::ALL)).unwrap();
+        }
+        for settings in invalid {
+            let error = store.set(settings.clone()).unwrap_err();
+            assert_eq!(error.code(), "INVALID_ARGUMENT", "{settings:?}");
+        }
+        // Validated even while passthrough is off, so turning it on can't
+        // pick up something invalid.
+        let mut off = with(&[DtsHd]);
+        off.playback.audio_passthrough = false;
+        assert!(store.set(off).is_err());
+        store.set(with(&[])).unwrap();
+        store.set(with(&[Dts, Ac3])).unwrap();
+    }
+
+    #[test]
+    fn stored_passthrough_formats_keep_the_valid_ones() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let load = |formats: Value| {
+            fs::write(
+                dir.join(FILE_NAME),
+                json!({
+                    "version": 3,
+                    "playback": { "audioPassthrough": true, "passthroughFormats": formats },
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let playback = SettingsStore::new(&dir).get().unwrap().playback;
+            assert!(playback.audio_passthrough);
+            playback.passthrough_formats
+        };
+        use PassthroughFormat::*;
+        assert_eq!(load(json!(["dts", "mp3", 7, "dts", "ac3"])), [Dts, Ac3]);
+        // DTS-HD needs DTS.
+        assert_eq!(load(json!(["dtsHd", "ac3"])), [Ac3]);
+        assert_eq!(load(json!([])), [] as [PassthroughFormat; 0]);
+        // Not a list: the defaults.
+        assert_eq!(load(json!("ac3")), PassthroughFormat::DEFAULTS);
+        let all = load(json!(["ac3", "eac3", "dts", "dtsHd", "truehd"]));
+        if cfg!(target_os = "macos") {
+            // Saved on another platform, or by hand: what a Mac can't do is dropped.
+            assert_eq!(all, [Ac3, Dts]);
+        } else {
+            assert_eq!(all, PassthroughFormat::ALL);
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

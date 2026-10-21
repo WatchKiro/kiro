@@ -39,6 +39,7 @@ import type { PlaybackSample } from '@/features/library/progress-tracker';
 import { ResumedNotice, ResumePrompt } from '@/features/library/resume-prompt';
 import { usePlaybackLibrary } from '@/features/library/use-playback-library';
 import { groupSubtitles } from '@/features/playback/addon-subtitles';
+import { describeAudio } from '@/features/playback/audio-mode';
 import { DEV_EXERCISE, pauseOncePlaying, runDevExercise } from '@/features/playback/dev-exercise';
 import type { NativePlayer, NativePlayerView } from '@/features/playback/native-player';
 import {
@@ -1188,6 +1189,7 @@ function StatsOverlay({
     ['fps', stats?.fps ? stats.fps.toFixed(2) : '—'],
     ['dropped', String(stats?.droppedFrames ?? 0)],
     ['cache', stats?.cacheSeconds != null ? `${stats.cacheSeconds.toFixed(1)} s` : '—'],
+    ['audio', describeAudio(stats)],
     ['rendered', String(stats?.framesRendered ?? 0)],
     ['scale', stats?.contentsScale ? `${stats.contentsScale}×` : '—'],
     ['chapters', view ? describeChapters(view.chapters.length, segments, online) : '—'],

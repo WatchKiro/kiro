@@ -57,6 +57,7 @@ use super::keep_awake::{KeepAwake, Transition};
 use super::model::{
     MAX_VOLUME, MediaTrack, PlaybackState, PlayerEvent, PlayerModel, PlayerSnapshot, TrackKind,
 };
+use super::passthrough::{Spdif, audio_mode};
 use super::{ExternalSubtitle, MediaSource, PlaybackBackend, PlaybackError, SubtitleStyle};
 use crate::presence::{PlayerView, Presence};
 use client::Mpv;
@@ -134,6 +135,13 @@ pub struct DebugStats {
     dropped_frames: i64,
     /// Seconds of media buffered ahead of the playback position.
     cache_seconds: Option<f64>,
+    /// The audio track's codec, e.g. `eac3`.
+    audio_codec: Option<String>,
+    /// `passthrough eac3` (sent to the receiver untouched) or `decoded`
+    /// (`media::passthrough::audio_mode`); `None` without audio.
+    audio_mode: Option<String>,
+    /// mpv's audio output, e.g. `coreaudio`, `coreaudio_exclusive`, `wasapi`.
+    audio_output: Option<String>,
     /// Frames drawn into the surface since attach: proves the render loop
     /// runs (macOS and Linux; mpv's own window on Windows isn't counted).
     frames_rendered: u64,
@@ -152,6 +160,8 @@ pub(crate) struct Shared {
     /// Discord Rich Presence, told about every change (it sends nothing
     /// unless the setting is on).
     presence: Mutex<Option<Arc<Presence>>>,
+    /// Audio passthrough: what mpv's `audio-spdif` should be.
+    spdif: Mutex<Spdif>,
 }
 
 impl Shared {
@@ -161,7 +171,28 @@ impl Shared {
             sink: Mutex::new(Some(sink)),
             keep_awake: Mutex::new(KeepAwake::new(PlatformWakelock {})),
             presence: Mutex::new(None),
+            spdif: Mutex::new(Spdif::default()),
         }
+    }
+
+    fn spdif(&self) -> MutexGuard<'_, Spdif> {
+        self.spdif.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Sets mpv's `audio-spdif` to what [`Spdif`] says, if it differs: mpv
+    /// re-creates the audio decoder when it changes. While anything is
+    /// passed through, the event thread reads mpv's log to notice a format
+    /// the audio output refused (`passthrough::FALLBACK_MESSAGE`).
+    fn apply_spdif(&self, mpv: &Mpv) -> client::Result<String> {
+        let (codecs, on) = {
+            let spdif = self.spdif();
+            (spdif.codecs(), spdif.is_on())
+        };
+        mpv.request_log_messages(if on { "v" } else { "no" })?;
+        if mpv.get_property::<String>("audio-spdif").as_deref() != Ok(codecs.as_str()) {
+            mpv.set_property("audio-spdif", codecs.as_str())?;
+        }
+        Ok(codecs)
     }
 
     fn presence(&self) -> Option<Arc<Presence>> {
@@ -284,7 +315,7 @@ impl MpvPlayer {
                 // mpv's own warnings, what the video output does, and which
                 // hardware decoders the decoder tries.
                 init.set_option("terminal", "yes")?;
-                init.set_option("msg-level", "all=warn,vo=v,libmpv_render=v,vd=v")?;
+                init.set_option("msg-level", "all=warn,vo=v,libmpv_render=v,vd=v,ad=v,ao=v")?;
             } else {
                 init.set_option("terminal", "no")?;
             }
@@ -367,6 +398,28 @@ impl MpvPlayer {
             eprintln!("[kiro-player] keep screen on: {on} (stop-screensaver = {mpv_value})");
         }
         events::wake(&self.mpv);
+    }
+
+    /// Settings → Playback → "Audio passthrough": mpv's `audio-spdif`, the
+    /// codecs sent to the receiver untouched (empty: decode everything). mpv
+    /// re-creates the audio decoder when it changes, so an unchanged choice
+    /// changes nothing (settings are saved mid-playback, e.g. the volume).
+    /// The output goes exclusive only for a passthrough track; a format it
+    /// refuses is decoded instead (`events`, [`Spdif::refuse`]).
+    pub fn set_audio_spdif(&self, codecs: &str) {
+        if !self.shared.spdif().choose(codecs) && !codecs.is_empty() {
+            return;
+        }
+        let result = self.shared.apply_spdif(&self.mpv);
+        if debug_log_enabled() {
+            match result {
+                Ok(codecs) if codecs.is_empty() => {
+                    eprintln!("[kiro-player] audio passthrough: off")
+                }
+                Ok(codecs) => eprintln!("[kiro-player] audio passthrough: {codecs}"),
+                Err(error) => eprintln!("[kiro-player] audio passthrough failed: {error:?}"),
+            }
+        }
     }
 
     /// Reports this player's state changes to Discord Rich Presence.
@@ -472,6 +525,9 @@ fn debug_stats(mpv: &Mpv, stats: &RenderStats) -> DebugStats {
         dropped_frames: i64_prop("frame-drop-count").unwrap_or(0)
             + i64_prop("decoder-frame-drop-count").unwrap_or(0),
         cache_seconds: f64_prop("demuxer-cache-duration"),
+        audio_codec: str_prop("audio-codec-name"),
+        audio_mode: audio_mode(str_prop("audio-out-params/format").as_deref()),
+        audio_output: str_prop("current-ao"),
         frames_rendered: stats.frames_rendered.load(Ordering::Relaxed),
         sample_pixel: format!("#{:06x}", stats.sample_pixel.load(Ordering::Relaxed)),
         contents_scale: f64::from_bits(stats.contents_scale.load(Ordering::Relaxed)),

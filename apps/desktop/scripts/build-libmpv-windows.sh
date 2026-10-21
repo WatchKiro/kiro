@@ -303,6 +303,7 @@ build_ffmpeg() {
       --disable-programs --disable-doc --disable-debug \
       --disable-encoders --disable-muxers --disable-indevs --disable-outdevs \
       --enable-indev=lavfi \
+      --enable-muxer=spdif \
       --disable-filter=gfxcapture,ddagrab \
       --enable-w32threads \
       --enable-zlib --enable-iconv \
@@ -398,6 +399,10 @@ verify() {
     && { echo "verify: FFmpeg was built with GPL, v3 or non-free code" >&2; exit 1; }
   grep -q 'FFMPEG_LICENSE "LGPL version 2.1 or later"' "$SRC/ffmpeg/config.h" \
     || { echo "verify: unexpected FFmpeg licence" >&2; exit 1; }
+  # Audio passthrough: mpv packs AC-3, E-AC-3, DTS and TrueHD for the
+  # receiver with FFmpeg's spdif muxer, the only muxer the build keeps.
+  grep -q '^#define CONFIG_SPDIF_MUXER 1' "$SRC/ffmpeg/config_components.h" \
+    || { echo "verify: FFmpeg was built without the spdif muxer (audio passthrough)" >&2; exit 1; }
   grep -q '^#define HAVE_D3D11 1' "$config" || { echo "verify: mpv was built without D3D11" >&2; exit 1; }
   grep -q '^#define CONFIG_D3D11VA 1' "$SRC/ffmpeg/config.h" \
     || { echo "verify: FFmpeg was built without d3d11va" >&2; exit 1; }

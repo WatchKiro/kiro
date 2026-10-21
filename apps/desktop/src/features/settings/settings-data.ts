@@ -7,6 +7,7 @@ import { languageCode, languageName } from '@/features/playback/track-labels';
 import type {
   CatalogRowSetting,
   GeneralSettings,
+  PassthroughFormat,
   PlaybackSettings,
   RowSettings,
   Settings,
@@ -37,6 +38,8 @@ export const DEFAULT_PLAYBACK_SETTINGS: PlaybackSettings = {
   volume: 100,
   markWatchedPercent: 90,
   keepScreenOn: true,
+  audioPassthrough: false,
+  passthroughFormats: ['ac3', 'dts'],
 };
 
 export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
@@ -87,6 +90,57 @@ export const RESUME_MODES: { value: PlaybackSettings['resume']; label: string }[
 export const MAX_VOLUME_PERCENT = 130;
 /** The "mark as watched" threshold stays within this, in percent (`WATCHED_PERCENT`). */
 export const WATCHED_PERCENT = { min: 70, max: 98 } as const;
+
+/** Formats audio passthrough can send, in order (`PassthroughFormat::ALL`). */
+export const PASSTHROUGH_FORMATS: { value: PassthroughFormat; label: string }[] = [
+  { value: 'ac3', label: 'Dolby Digital' },
+  { value: 'eac3', label: 'Dolby Digital Plus' },
+  { value: 'dts', label: 'DTS' },
+  { value: 'dtsHd', label: 'DTS-HD' },
+  { value: 'truehd', label: 'TrueHD' },
+];
+
+/**
+ * Whether the platform (`AppInfo.os`) can pass a format through, as
+ * `PassthroughFormat::is_supported` decides: a Mac only sends Dolby Digital
+ * and DTS. `null` (not known yet, or the browser preview): every format.
+ */
+export function isPassthroughAvailable(format: PassthroughFormat, os: string | null): boolean {
+  return os !== 'macos' || format === 'ac3' || format === 'dts';
+}
+
+/**
+ * Passthrough formats as the core keeps them: known, distinct, in
+ * {@link PASSTHROUGH_FORMATS} order, and DTS-HD only with DTS (mpv's DTS-HD
+ * passthrough also sends DTS cores).
+ */
+export function normalizePassthroughFormats(formats: readonly unknown[]): PassthroughFormat[] {
+  const kept = PASSTHROUGH_FORMATS.map((format) => format.value).filter((format) =>
+    formats.includes(format),
+  );
+  return kept.includes('dts') ? kept : kept.filter((format) => format !== 'dtsHd');
+}
+
+/**
+ * `formats` with one turned on or off. DTS-HD brings DTS with it, and DTS
+ * takes DTS-HD with it.
+ */
+export function withPassthroughFormat(
+  formats: readonly PassthroughFormat[],
+  format: PassthroughFormat,
+  on: boolean,
+): PassthroughFormat[] {
+  if (on) {
+    return normalizePassthroughFormats([
+      ...formats,
+      format,
+      ...(format === 'dtsHd' ? ['dts'] : []),
+    ]);
+  }
+  return normalizePassthroughFormats(
+    formats.filter((kept) => kept !== format && !(format === 'dts' && kept === 'dtsHd')),
+  );
+}
 
 /** Subtitle sizes, in percent of the player's default (`SUBTITLE_SIZES`). */
 export const SUBTITLE_SIZE = { min: 50, max: 200, step: 10 } as const;
@@ -297,6 +351,10 @@ function parsePlaybackSettings(value: unknown): PlaybackSettings {
       whole(playback.markWatchedPercent, WATCHED_PERCENT.min, WATCHED_PERCENT.max) ??
       defaults.markWatchedPercent,
     keepScreenOn: flag(playback.keepScreenOn, defaults.keepScreenOn),
+    audioPassthrough: flag(playback.audioPassthrough, defaults.audioPassthrough),
+    passthroughFormats: Array.isArray(playback.passthroughFormats)
+      ? normalizePassthroughFormats(playback.passthroughFormats)
+      : defaults.passthroughFormats,
   };
 }
 

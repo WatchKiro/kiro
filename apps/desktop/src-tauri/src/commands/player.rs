@@ -71,6 +71,14 @@ impl PlayerState {
         }
     }
 
+    /// Applies Settings → Playback → "Audio passthrough" (mpv's
+    /// `audio-spdif`) to the attached player, if any.
+    pub fn set_audio_spdif(&self, codecs: &str) {
+        if let Ok(player) = self.get() {
+            player.set_audio_spdif(codecs);
+        }
+    }
+
     /// Applies Settings → General → "Show what I'm watching on Discord" and
     /// its options.
     pub fn set_presence_options(&self, options: PresenceOptions) {
@@ -102,6 +110,15 @@ fn presence_options(app: &AppState) -> PresenceOptions {
     app.settings()
         .and_then(|settings| settings.get())
         .map(|settings| PresenceOptions::from(&settings.general))
+        .unwrap_or_default()
+}
+
+/// Settings → Playback → "Audio passthrough", as mpv's `audio-spdif` (off,
+/// decoding everything, if the settings can't be read).
+fn audio_spdif(app: &AppState) -> String {
+    app.settings()
+        .and_then(|settings| settings.get())
+        .map(|settings| settings.playback.audio_spdif())
         .unwrap_or_default()
 }
 
@@ -161,10 +178,12 @@ pub async fn player_attach<R: Runtime>(
 ) -> Result<PlayerSnapshot> {
     let _guard = state.lifecycle.lock().await;
     let keep_screen_on = keep_screen_on(&app);
+    let audio_spdif = audio_spdif(&app);
     state.presence.set_options(presence_options(&app));
     if let Ok(player) = state.get() {
         player.set_sink(sink(on_event));
         player.set_keep_screen_on(keep_screen_on);
+        player.set_audio_spdif(&audio_spdif);
         return logged(
             "player_attach",
             format_args!("reconnect"),
@@ -177,6 +196,7 @@ pub async fn player_attach<R: Runtime>(
         Err(error) => return logged("player_attach", format_args!("new"), Err(error)),
     });
     player.set_keep_screen_on(keep_screen_on);
+    player.set_audio_spdif(&audio_spdif);
     player.set_presence(state.presence.clone());
     let snapshot = logged("player_attach", format_args!("new"), Ok(player.snapshot()))?;
     state.set(Some(player));

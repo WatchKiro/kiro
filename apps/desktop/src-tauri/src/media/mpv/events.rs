@@ -4,6 +4,10 @@
 //! events (start/end of file, seeks). The thread turns each into a
 //! [`Change`], feeds it to the shared [`PlayerModel`](crate::media::model::PlayerModel)
 //! and forwards the resulting events to the renderer. Nothing polls.
+//!
+//! While audio passthrough is on it also reads mpv's log, for the one line
+//! that says the audio output refused a passthrough format
+//! ([`passthrough_refused`]).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +18,7 @@ use super::client::{self, Event, Format, Mpv, PropertyData};
 use super::ffi::error as mpv_error;
 use super::{RenderStats, Shared, debug_log_enabled, debug_stats, mpv_error_message};
 use crate::media::model::{Change, FailureCode, PlayerFailure};
+use crate::media::passthrough::FALLBACK_MESSAGE;
 
 /// Properties the player observes, by observation id (index + 1). Formats are
 /// limited to what [`client`] decodes in events (no `Node`): `track-list`
@@ -76,6 +81,18 @@ fn run(mpv: &Mpv, shared: &Shared, stats: &RenderStats, stop: &AtomicBool) {
             // A wakeup, a timeout, or a property that became unavailable.
             None => None,
             Some(Ok(Event::Shutdown)) => break,
+            Some(Ok(Event::LogMessage { prefix, text })) => {
+                if prefix == "cplayer" && text.starts_with(FALLBACK_MESSAGE) {
+                    passthrough_refused(mpv, shared);
+                }
+                None
+            }
+            Some(Ok(Event::StartFile)) => {
+                // A new stream tries every chosen format again.
+                shared.spdif().new_stream();
+                let _ = shared.apply_spdif(mpv);
+                Some(Change::StartFile)
+            }
             Some(Ok(event)) => to_change(event),
             // Failed `end-file` events arrive as errors; nothing else we use
             // completes asynchronously.
@@ -94,6 +111,36 @@ fn run(mpv: &Mpv, shared: &Shared, stats: &RenderStats, stop: &AtomicBool) {
             eprintln!("[kiro-player] {state:?} {:?}", debug_stats(mpv, stats));
         }
     }
+}
+
+/// No audio output took the passthrough format of the track playing, and
+/// mpv fell back to decoding it. mpv 0.41 then stalls: it never opens an
+/// output for the decoded audio, and video waits for it. Dropping the codec
+/// from `audio-spdif` re-creates the decoder and playback carries on,
+/// decoded, for the rest of the stream; if there is nothing to drop, an
+/// exact seek to where playback is restarts it the same way.
+fn passthrough_refused(mpv: &Mpv, shared: &Shared) {
+    let codec = mpv
+        .get_property::<String>("audio-codec-name")
+        .unwrap_or_default();
+    let dropped = shared.spdif().refuse(&codec);
+    let result = if dropped {
+        shared.apply_spdif(mpv).map(|_| ())
+    } else {
+        mpv.command("seek", &["0", "relative+exact"])
+    };
+    let now = mpv
+        .get_property::<String>("audio-spdif")
+        .unwrap_or_default();
+    eprintln!(
+        "[kiro-player] audio passthrough: the audio output refused {codec}, decoding it \
+         (passing through: {}){}",
+        if now.is_empty() { "nothing" } else { &now },
+        match result {
+            Ok(()) => String::new(),
+            Err(error) => format!(", restarting audio failed: {error:?}"),
+        }
+    );
 }
 
 fn to_change(event: Event) -> Option<Change> {

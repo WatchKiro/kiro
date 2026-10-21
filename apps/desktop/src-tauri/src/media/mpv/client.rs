@@ -198,6 +198,14 @@ pub enum Event {
     EndFile,
     FileLoaded,
     PlaybackRestart,
+    /// A line of mpv's log, at or above the level passed to
+    /// [`Mpv::request_log_messages`].
+    LogMessage {
+        /// The module, e.g. `cplayer` or `ao/coreaudio`.
+        prefix: String,
+        /// Without the trailing newline.
+        text: String,
+    },
     /// An observed property changed; `id` is the one passed to
     /// [`Mpv::observe_property`].
     PropertyChange {
@@ -309,6 +317,14 @@ impl Mpv {
         })
     }
 
+    /// Reports mpv's log lines at `level` (`warn`, `info`, `v`, ...) and
+    /// above as [`Event::LogMessage`].
+    pub fn request_log_messages(&self, level: &str) -> Result<()> {
+        let level = cstring(level)?;
+        // SAFETY: the handle is live; mpv copies the level.
+        check(unsafe { ffi::mpv_request_log_messages(self.ctx.as_ptr(), level.as_ptr()) })
+    }
+
     /// Waits up to `timeout` seconds (negative: forever) for the next event.
     ///
     /// `None` on a timeout, a [`wakeup`](Self::wakeup), or a property that
@@ -339,6 +355,16 @@ impl Mpv {
             }
             ffi::MPV_EVENT_FILE_LOADED => Event::FileLoaded,
             ffi::MPV_EVENT_PLAYBACK_RESTART => Event::PlaybackRestart,
+            ffi::MPV_EVENT_LOG_MESSAGE => {
+                // SAFETY: LOG_MESSAGE events carry an `mpv_event_log_message`
+                // whose strings are valid UTF-8 or not, but always set.
+                let message = unsafe { &*event.data.cast::<ffi::mpv_event_log_message>() };
+                let text = |ptr| unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
+                Event::LogMessage {
+                    prefix: text(message.prefix).into_owned(),
+                    text: text(message.text).trim_end().to_owned(),
+                }
+            }
             ffi::MPV_EVENT_PROPERTY_CHANGE => {
                 // SAFETY: PROPERTY_CHANGE events carry an `mpv_event_property`,
                 // whose `data` matches its `format`.
@@ -467,6 +493,21 @@ mod tests {
                 id: 7,
                 data: PropertyData::Flag(true),
             })) => Some(()),
+            _ => None,
+        });
+    }
+
+    #[test]
+    fn log_messages_arrive_once_requested() {
+        let mpv = headless();
+        mpv.request_log_messages("v").unwrap();
+        mpv.set_property("pause", true).unwrap();
+        wait_for(&mpv, |event| match event {
+            Some(Ok(Event::LogMessage { prefix, text }))
+                if prefix == "cplayer" && text.starts_with("Set property: pause") =>
+            {
+                Some(())
+            }
             _ => None,
         });
     }

@@ -68,6 +68,7 @@ pub const MPV_FORMAT_DOUBLE: mpv_format = 5;
 pub type mpv_event_id = c_int;
 pub const MPV_EVENT_NONE: mpv_event_id = 0;
 pub const MPV_EVENT_SHUTDOWN: mpv_event_id = 1;
+pub const MPV_EVENT_LOG_MESSAGE: mpv_event_id = 2;
 pub const MPV_EVENT_START_FILE: mpv_event_id = 6;
 pub const MPV_EVENT_END_FILE: mpv_event_id = 7;
 pub const MPV_EVENT_FILE_LOADED: mpv_event_id = 8;
@@ -87,6 +88,16 @@ pub struct mpv_event_property {
     pub name: *const c_char,
     pub format: mpv_format,
     pub data: *mut c_void,
+}
+
+#[repr(C)]
+pub struct mpv_event_log_message {
+    /// The module, e.g. `cplayer` or `ao/coreaudio`.
+    pub prefix: *const c_char,
+    pub level: *const c_char,
+    pub text: *const c_char,
+    /// `mpv_log_level`.
+    pub log_level: c_int,
 }
 
 #[repr(C)]
@@ -177,6 +188,7 @@ unsafe extern "C" {
         format: mpv_format,
     ) -> c_int;
     pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
+    pub fn mpv_request_log_messages(ctx: *mut mpv_handle, min_level: *const c_char) -> c_int;
     pub fn mpv_wakeup(ctx: *mut mpv_handle);
 
     // render.h

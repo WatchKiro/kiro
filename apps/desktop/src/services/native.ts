@@ -237,7 +237,17 @@ export interface PlaybackSettings {
   markWatchedPercent: number;
   /** Keep the display awake (no screensaver or display sleep) while a video plays. */
   keepScreenOn: boolean;
+  /** Send `passthroughFormats` to an AV receiver untouched instead of decoding them. */
+  audioPassthrough: boolean;
+  /** Distinct, each available on this platform, DTS-HD only with DTS. */
+  passthroughFormats: PassthroughFormat[];
 }
+
+/**
+ * A soundtrack format that can be passed through to an AV receiver
+ * (`media::passthrough::PassthroughFormat`).
+ */
+export type PassthroughFormat = 'ac3' | 'eac3' | 'dts' | 'dtsHd' | 'truehd';
 
 /** How subtitles look (`settings::SubtitleSettings`), and which track type is picked. */
 export interface SubtitleSettings {

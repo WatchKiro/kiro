@@ -27,6 +27,14 @@
  * (detach), a few seconds apart, for watching `pmset -g assertions` (the Rust
  * log shows each `keep awake` change).
  *
+ * `VITE_KIRO_SPIKE_EXERCISE=passthrough` (with `VITE_KIRO_SPIKE_AUTOPLAY` set
+ * to a file whose audio tracks are AC-3, E-AC-3, DTS and TrueHD, in that
+ * order) turns Settings → Playback → "Audio passthrough" on with every
+ * format this platform can send, plays each track, turns passthrough off and
+ * on again during the last one, and leaves, a few seconds apart. The Rust
+ * log shows mpv's decoder and audio output choices, and the stats every 2 s
+ * say `passthrough <codec>` or `decoded`.
+ *
  * `VITE_KIRO_SPIKE_EXERCISE=timing` presses the player's keys: plays a
  * stretch at normal speed and one at 1.5× (`]`), logging the position after
  * each as a seek to where playback paused; pauses at 13.5 s, just after a
@@ -54,8 +62,9 @@
 import type { PlaybackState } from '@kiro/player-core';
 
 import type { NativePlayer } from '@/features/playback/native-player';
+import { PASSTHROUGH_FORMATS, isPassthroughAvailable } from '@/features/settings/settings-data';
 import { settingsStore } from '@/features/settings/settings-store';
-import type { GeneralSettings } from '@/services/native';
+import { getAppInfo, type GeneralSettings } from '@/services/native';
 
 const MODE = import.meta.env.DEV
   ? (import.meta.env.VITE_KIRO_SPIKE_EXERCISE as string | undefined)
@@ -131,6 +140,7 @@ export async function runDevExercise(
   if (MODE === 'smoke') return pauseOncePlaying(player);
   if (MODE === 'streams') return exerciseStreams(player, navigate);
   if (MODE === 'timing') return exerciseTiming(player, navigate);
+  if (MODE === 'passthrough') return exercisePassthrough(player, navigate);
   if (MODE === 'awake') {
     const keepScreenOn = (on: boolean) =>
       settingsStore.getState().updatePlayback({ keepScreenOn: on });
@@ -209,6 +219,31 @@ export async function runDevExercise(
     await step(() => player.selectAudioTrack('2'));
     void navigate('/');
   }
+}
+
+async function exercisePassthrough(player: NativePlayer, navigate: (to: string) => unknown) {
+  const { os } = await getAppInfo();
+  const passthrough = (audioPassthrough: boolean) =>
+    settingsStore.getState().updatePlayback({
+      audioPassthrough,
+      passthroughFormats: PASSTHROUGH_FORMATS.map((format) => format.value).filter((format) =>
+        isPassthroughAvailable(format, os),
+      ),
+    });
+  await passthrough(true);
+  await waitForState(player, 'playing');
+  await sleep(5000);
+  for (const track of ['2', '3', '4']) {
+    await step(() => player.selectAudioTrack(track));
+    await sleep(5000);
+  }
+  await step(() => player.selectAudioTrack('1'));
+  await sleep(5000);
+  await passthrough(false);
+  await sleep(6000);
+  await passthrough(true);
+  await sleep(6000);
+  void navigate('/');
 }
 
 /** Clicks the skip button whose text starts with `label` once it shows. */
