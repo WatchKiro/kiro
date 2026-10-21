@@ -36,20 +36,18 @@ pub use worker::{Ipc, IpcError, Timing};
 /// name after "Watching" ("Watching Kiro") and its Rich Presence art holds
 /// the logo ([`LOGO_ASSET`]) shown when a title has no https poster.
 ///
-/// TODO(discord): this is a placeholder, and presence stays off until it's
-/// replaced (Settings says so). Create an application named "Kiro" at
-/// <https://discord.com/developers/applications>, upload
-/// `apps/desktop/app-icon.png` under Rich Presence → Art Assets with the
-/// name `kiro`, then set the application's ID here or in
-/// `KIRO_DISCORD_APPLICATION_ID` when building.
+/// `KIRO_DISCORD_APPLICATION_ID` overrides it when building, e.g. for a test
+/// application.
 pub const APPLICATION_ID: &str = match option_env!("KIRO_DISCORD_APPLICATION_ID") {
     Some(id) => id,
-    None => PLACEHOLDER_APPLICATION_ID,
+    None => KIRO_APPLICATION_ID,
 };
+/// Kiro's Discord application, "Kiro". Application IDs are public.
+const KIRO_APPLICATION_ID: &str = "1562560902031745155";
 const PLACEHOLDER_APPLICATION_ID: &str = "000000000000000000";
 
 /// The Kiro logo's name among the application's Rich Presence art assets.
-pub const LOGO_ASSET: &str = "kiro";
+pub const LOGO_ASSET: &str = "app-icon";
 
 /// Shown instead of the title when the title is hidden.
 pub const HIDDEN_TITLE: &str = "Watching something on Kiro";
