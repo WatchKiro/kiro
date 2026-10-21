@@ -14,6 +14,7 @@ import {
 } from '@/app/navigation';
 import { useAddonsStore } from '@/features/addons/addons-store';
 import { otherTypes, sectionFor } from '@/features/discovery/browse-data';
+import { ProfileMenu } from '@/features/profiles/profile-menu';
 import { UpdatePrompt } from '@/features/updates/update-prompt';
 import { isNativeRuntime } from '@/services/native';
 import { useUiStore } from '@/stores/ui-store';
@@ -71,6 +72,7 @@ export function Sidebar() {
       <UpdatePrompt collapsed={collapsed} />
 
       <div className="space-y-0.5 border-t border-white/[0.06] p-3">
+        <ProfileMenu collapsed={collapsed} />
         {DEV_NAV_ITEMS.map((item) => (
           <SidebarLink key={item.to} item={item} collapsed={collapsed} />
         ))}

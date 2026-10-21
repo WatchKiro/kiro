@@ -39,7 +39,7 @@ mod rows;
 
 pub use rows::{CatalogRow, MAX_LAYOUT_ROWS, RowSettings};
 
-const FILE_NAME: &str = "settings.json";
+pub const FILE_NAME: &str = "settings.json";
 const FORMAT_VERSION: u32 = 3;
 /// Most languages that can be listed for audio or subtitles.
 pub const MAX_LANGUAGES: usize = 8;

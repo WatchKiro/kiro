@@ -15,6 +15,7 @@ pub mod app;
 pub mod library;
 #[cfg(native_player)]
 pub mod player;
+pub mod profiles;
 pub mod settings;
 pub mod skip_times;
 pub mod stremio;

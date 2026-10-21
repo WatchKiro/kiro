@@ -170,7 +170,7 @@ export interface PlaybackProgress {
   duration: number;
 }
 
-/** Library commands (`commands::library`): the watchlist and watch history. */
+/** Library commands (`commands::library`): the active profile's watchlist and watch history. */
 export const libraryCommands = {
   watchlist: () => invoke<WatchlistItem[]>('library_watchlist'),
   addToWatchlist: (title: LibraryTitle) =>
@@ -336,11 +336,60 @@ export const skipTimesCommands = {
     invoke<unknown>('skip_times_lookup', { imdbId, season, episode, duration }),
 };
 
-/** Settings commands (`commands::settings`), stored on-device by the core. */
+/** Settings commands (`commands::settings`): the active profile's, stored on-device by the core. */
 export const settingsCommands = {
   get: () => invoke<Settings>('settings_get'),
   /** Rejects with `INVALID_ARGUMENT` if the core refuses a value. */
   set: (settings: Settings) => invoke<Settings>('settings_set', { settings }),
+};
+
+/** A profile (`profiles::Profile`). Its PIN never leaves the core, only whether it has one. */
+export interface Profile {
+  id: number;
+  name: string;
+  /** One of the built-in avatars (`AVATARS` in `features/profiles/profiles-data.ts`). */
+  avatar: string;
+  /** Switching into it asks for its 4-digit PIN. */
+  hasPin: boolean;
+  /** Unix milliseconds. */
+  createdAt: number;
+}
+
+/** Every profile, oldest first, and the active one (`profiles::ProfilesOverview`). */
+export interface ProfilesOverview {
+  profiles: Profile[];
+  /** The library and settings commands act on this profile. */
+  active: number;
+  /** Show "Who’s watching?" at launch when there is more than one profile. */
+  showPicker: boolean;
+}
+
+/**
+ * Profile commands (`commands::profiles`). Each returns the profiles as they
+ * are now. `pin` is the profile's PIN, needed to switch into a locked profile
+ * and to change one other than the active profile; a missing or wrong one
+ * rejects with `PIN_REQUIRED` or `WRONG_PIN`. Don't keep PINs in a store or log them.
+ */
+export const profileCommands = {
+  list: () => invoke<ProfilesOverview>('profile_list'),
+  create: (name: string, avatar: string, pin: string | null) =>
+    invoke<ProfilesOverview>('profile_create', { name, avatar, pin }),
+  rename: (id: number, name: string, pin?: string) =>
+    invoke<ProfilesOverview>('profile_rename', { id, name, pin }),
+  setAvatar: (id: number, avatar: string, pin?: string) =>
+    invoke<ProfilesOverview>('profile_set_avatar', { id, avatar, pin }),
+  /** `newPin`: `null` removes the PIN. */
+  setPin: (id: number, newPin: string | null, pin?: string) =>
+    invoke<ProfilesOverview>('profile_set_pin', { id, newPin, pin }),
+  /**
+   * Deletes the profile with its library and settings. Not the active or last
+   * one. Needs no PIN (how a profile whose PIN was forgotten is removed): ask
+   * for its name to be typed first.
+   */
+  remove: (id: number) => invoke<ProfilesOverview>('profile_delete', { id }),
+  /** Stops playback, then makes `id` the active profile (and the one opened next launch). */
+  switchTo: (id: number, pin?: string) => invoke<ProfilesOverview>('profile_switch', { id, pin }),
+  setShowPicker: (show: boolean) => invoke<ProfilesOverview>('profile_set_show_picker', { show }),
 };
 
 /**

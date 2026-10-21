@@ -77,6 +77,16 @@ impl PlayerState {
         self.presence.set_options(options);
     }
 
+    /// Switching profiles: stop what's playing (its progress belongs to the
+    /// profile being left) and clear what Discord shows. The renderer leaves
+    /// the player page, which detaches it.
+    pub fn close_for_profile_switch(&self) {
+        if let Ok(player) = self.get() {
+            let _ = player.stop();
+        }
+        self.presence.set_media(None);
+    }
+
     /// The app is quitting: give the display assertion back and clear what
     /// Discord shows now, rather than leave it to the process exiting.
     pub fn release_on_exit(&self) {
@@ -90,7 +100,7 @@ impl PlayerState {
 /// Settings → General → Discord (off if the settings can't be read).
 fn presence_options(app: &AppState) -> PresenceOptions {
     app.settings()
-        .get()
+        .and_then(|settings| settings.get())
         .map(|settings| PresenceOptions::from(&settings.general))
         .unwrap_or_default()
 }
@@ -99,7 +109,7 @@ fn presence_options(app: &AppState) -> PresenceOptions {
 /// settings can't be read).
 fn keep_screen_on(app: &AppState) -> bool {
     app.settings()
-        .get()
+        .and_then(|settings| settings.get())
         .map_or(true, |settings| settings.playback.keep_screen_on)
 }
 

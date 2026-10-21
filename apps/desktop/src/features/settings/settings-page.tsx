@@ -5,6 +5,7 @@ import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useLocation } from 'react-router';
 
 import { Page } from '@/components/page';
+import { ProfilesSection } from '@/features/profiles/profiles-section';
 import { useShortcutsHelpStore } from '@/features/remote/shortcuts-store';
 import { AddonsSection } from '@/features/settings/addon-settings';
 import {
@@ -81,6 +82,7 @@ export function SettingsPage() {
               {error}
             </p>
           )}
+          <ProfilesSection />
           <GeneralSection />
           <PlaybackSection />
           <SubtitlesSection />

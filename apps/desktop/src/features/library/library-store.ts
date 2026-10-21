@@ -50,6 +50,11 @@ export interface LibraryState {
   recordProgress: (progress: PlaybackProgress) => Promise<void>;
   removeFromHistory: (type: string, id: string) => Promise<void>;
   clearHistory: () => Promise<void>;
+  /**
+   * Forgets everything read (another profile is now active): lists go back
+   * to idle and responses still on their way are ignored.
+   */
+  clear: () => void;
 }
 
 function emptyList<T>(): LibraryList<T> {
@@ -169,6 +174,16 @@ export function createLibraryStore(backend: LibraryBackend) {
             items: state.continueWatching.items.filter(keep),
           },
         }));
+      },
+
+      clear() {
+        for (const list of Object.keys(requests) as ListName[]) requests[list] += 1;
+        set({
+          watchlist: emptyList(),
+          history: emptyList(),
+          continueWatching: emptyList(),
+          titles: {},
+        });
       },
 
       async clearHistory() {

@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "capabilities": ["default", "player", "stremio-import", "updates"],
+      "capabilities": ["default", "player", "profiles", "stremio-import", "updates"],
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",

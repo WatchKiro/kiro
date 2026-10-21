@@ -15,7 +15,7 @@ pub async fn skip_times_lookup(
     duration: f64,
     state: State<'_, AppState>,
 ) -> Result<SkipTimes> {
-    if !state.settings().get()?.playback.online_skip_times {
+    if !state.settings()?.get()?.playback.online_skip_times {
         return Err(Error::invalid_argument(
             "Looking up intro times online is turned off",
         ));

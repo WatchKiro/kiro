@@ -54,6 +54,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Library database (watchlist, watch history). SQLite is compiled in so every
 # platform gets the same, current version.
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+# Hashing profile PINs (PBKDF2-HMAC-SHA256, src/profiles/pin.rs) and their
+# salts. Already built for rustls's `ring` provider, so nothing new compiles.
+ring = { version = "0.17", default-features = false }
 # Version numbers: which update feed a build follows (src/updates.rs).
 semver = "1"
 serde = { version = "1", features = ["derive"] }

@@ -10,6 +10,7 @@
 //! - [`addons`]   — addon endpoint policy, HTTP transport and installed addons
 //! - [`library`]  — watchlist and watch history
 //! - [`presence`] — Discord Rich Presence while a video plays (off unless chosen)
+//! - [`profiles`] — profiles: whose library and settings the app shows
 //! - [`settings`] — user preferences
 //! - [`skip_times`] — intro and credits times looked up online (SkipDB)
 //! - [`storage`]  — local persistence locations and the SQLite database
@@ -22,6 +23,7 @@ pub mod core;
 pub mod library;
 pub mod media;
 pub mod presence;
+pub mod profiles;
 pub mod settings;
 pub mod skip_times;
 pub mod storage;
@@ -89,6 +91,14 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             commands::library::library_history_clear,
             commands::settings::settings_get,
             commands::settings::settings_set,
+            commands::profiles::profile_list,
+            commands::profiles::profile_create,
+            commands::profiles::profile_rename,
+            commands::profiles::profile_set_avatar,
+            commands::profiles::profile_set_pin,
+            commands::profiles::profile_delete,
+            commands::profiles::profile_switch,
+            commands::profiles::profile_set_show_picker,
             commands::skip_times::skip_times_lookup,
             commands::stremio::stremio_import_fetch,
             commands::stremio::stremio_import_library,
@@ -140,6 +150,14 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::library::library_history_clear,
         commands::settings::settings_get,
         commands::settings::settings_set,
+        commands::profiles::profile_list,
+        commands::profiles::profile_create,
+        commands::profiles::profile_rename,
+        commands::profiles::profile_set_avatar,
+        commands::profiles::profile_set_pin,
+        commands::profiles::profile_delete,
+        commands::profiles::profile_switch,
+        commands::profiles::profile_set_show_picker,
         commands::skip_times::skip_times_lookup,
         commands::stremio::stremio_import_fetch,
         commands::stremio::stremio_import_library,
@@ -853,6 +871,143 @@ mod tests {
         settings["playback"]["markWatchedPercent"] = json!(80);
         call("settings_set", json!({ "settings": settings }));
         assert_eq!(record("tt1")["completed"], true);
+    }
+
+    #[test]
+    fn profile_commands_are_allowed_validate_and_keep_profiles_apart() {
+        let app = TestApp::new("profiles");
+        let call = |cmd: &str, args: Value| -> Value {
+            app.invoke(cmd, args)
+                .unwrap_or_else(|error| panic!("{cmd} should be permitted: {error}"))
+                .deserialize()
+                .unwrap()
+        };
+        let fails = |cmd: &str, args: Value| -> Value {
+            let error = app.invoke(cmd, args).unwrap_err();
+            assert!(!is_permission_error(&error), "{cmd}: {error}");
+            error
+        };
+
+        let overview = call("profile_list", json!({}));
+        assert_eq!(overview["active"], 1);
+        assert_eq!(overview["profiles"][0]["name"], "Me");
+        assert_eq!(overview["showPicker"], true);
+
+        // Arguments are validated at the boundary.
+        for (cmd, args) in [
+            ("profile_create", json!({ "name": "", "avatar": "teal" })),
+            (
+                "profile_create",
+                json!({ "name": "A\u{7}b", "avatar": "teal" }),
+            ),
+            (
+                "profile_create",
+                json!({ "name": "x".repeat(21), "avatar": "teal" }),
+            ),
+            (
+                "profile_create",
+                json!({ "name": "Sam", "avatar": "file:///etc/passwd" }),
+            ),
+            (
+                "profile_create",
+                json!({ "name": "Sam", "avatar": "teal", "pin": "12345" }),
+            ),
+            (
+                "profile_create",
+                json!({ "name": "Sam", "avatar": "teal", "pin": 1234 }),
+            ),
+            ("profile_rename", json!({ "id": 0, "name": "Sam" })),
+            ("profile_switch", json!({ "id": "1" })),
+            ("profile_switch", json!({ "id": 42 })),
+            ("profile_delete", json!({ "id": 1 })),
+            ("profile_set_show_picker", json!({ "show": "yes" })),
+        ] {
+            fails(cmd, args);
+        }
+
+        let overview = call(
+            "profile_create",
+            json!({ "name": "  Sam ", "avatar": "teal", "pin": "2468" }),
+        );
+        let sam = &overview["profiles"][1];
+        assert_eq!(sam["name"], "Sam");
+        assert_eq!(sam["hasPin"], true);
+        assert!(sam.get("pinHash").is_none());
+        let sam = sam["id"].clone();
+
+        // The first profile's library and settings.
+        let title = json!({ "type": "movie", "id": "tt1", "name": "Film", "poster": null });
+        call("library_watchlist_add", json!({ "title": title }));
+        call(
+            "library_record_progress",
+            json!({ "progress": {
+                "title": title,
+                "video": { "id": "tt1", "season": null, "episode": null },
+                "position": 300,
+                "duration": 1500,
+            }}),
+        );
+        let mut settings = call("settings_get", json!({}));
+        settings["playback"]["volume"] = json!(40);
+        call("settings_set", json!({ "settings": settings }));
+
+        // Sam's PIN is needed to switch, and a wrong one changes nothing.
+        assert_eq!(
+            fails("profile_switch", json!({ "id": sam }))["code"],
+            "PIN_REQUIRED"
+        );
+        assert_eq!(
+            fails("profile_switch", json!({ "id": sam, "pin": "1111" }))["code"],
+            "WRONG_PIN"
+        );
+        assert_eq!(call("profile_list", json!({}))["active"], 1);
+        let overview = call("profile_switch", json!({ "id": sam, "pin": "2468" }));
+        assert_eq!(overview["active"], sam);
+
+        // Sam sees none of it.
+        assert_eq!(call("library_watchlist", json!({})), json!([]));
+        assert_eq!(call("library_history", json!({})), json!([]));
+        assert_eq!(call("library_continue_watching", json!({})), json!([]));
+        assert_eq!(
+            call(
+                "library_title_state",
+                json!({ "type": "movie", "id": "tt1" })
+            ),
+            json!({ "inWatchlist": false, "progress": [] })
+        );
+        assert_eq!(call("settings_get", json!({}))["playback"]["volume"], 100);
+        call("library_history_clear", json!({}));
+
+        // Not the active profile.
+        fails("profile_delete", json!({ "id": sam }));
+
+        call("profile_switch", json!({ "id": 1 }));
+        assert_eq!(call("library_watchlist", json!({}))[0]["title"], title);
+        assert_eq!(call("library_history", json!({}))[0]["title"], title);
+        assert_eq!(call("settings_get", json!({}))["playback"]["volume"], 40);
+
+        // Changing Sam from here needs Sam's PIN.
+        assert_eq!(
+            fails("profile_rename", json!({ "id": sam, "name": "Samuel" }))["code"],
+            "PIN_REQUIRED"
+        );
+        let overview = call(
+            "profile_rename",
+            json!({ "id": sam, "name": "Samuel", "pin": "2468" }),
+        );
+        assert_eq!(overview["profiles"][1]["name"], "Samuel");
+        call("profile_set_avatar", json!({ "id": 1, "avatar": "amber" }));
+        call("profile_set_pin", json!({ "id": 1, "newPin": "0000" }));
+        let overview = call("profile_set_show_picker", json!({ "show": false }));
+        assert_eq!(overview["showPicker"], false);
+        assert_eq!(overview["profiles"][0]["avatar"], "amber");
+        assert_eq!(overview["profiles"][0]["hasPin"], true);
+
+        // Deleting needs no PIN (a forgotten one can't lock a profile in forever).
+        let overview = call("profile_delete", json!({ "id": sam }));
+        assert_eq!(overview["profiles"].as_array().unwrap().len(), 1);
+        // Never the last one.
+        fails("profile_delete", json!({ "id": 1 }));
     }
 
     #[test]

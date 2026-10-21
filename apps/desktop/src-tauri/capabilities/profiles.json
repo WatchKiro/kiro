@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "profiles",
+  "description": "Profiles: list them, add one, rename one or change its avatar or PIN, delete one, switch to one, and choose whether “Who’s watching?” shows at launch. Only these commands; the library and settings commands (default capability) act on the active profile alone.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-profile-list",
+    "allow-profile-create",
+    "allow-profile-rename",
+    "allow-profile-set-avatar",
+    "allow-profile-set-pin",
+    "allow-profile-delete",
+    "allow-profile-switch",
+    "allow-profile-set-show-picker"
+  ]
+}

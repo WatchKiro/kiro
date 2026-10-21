@@ -151,7 +151,7 @@ GtkApplicationWindow (RGBA visual)
 
 ## Preferred languages
 
-Settings → Playback holds ordered audio and subtitle languages and "Subtitles off by default", stored by the core in `settings.json` in the config directory (`src-tauri/src/settings`, commands `settings_get` / `settings_set`). They live in the core rather than `localStorage` because the renderer's origin differs between the dev server's port and release builds, and so they are validated at the boundary like other stored input.
+Settings → Playback holds ordered audio and subtitle languages and "Subtitles off by default", stored by the core in the active profile's `settings.json` (`src-tauri/src/settings`, commands `settings_get` / `settings_set`; each profile has its own, see [profiles.md](profiles.md)). They live in the core rather than `localStorage` because the renderer's origin differs between the dev server's port and release builds, and so they are validated at the boundary like other stored input.
 
 When a stream's first track list arrives after `loading`, the player applies `chooseTracks` (`features/playback/track-preferences.ts`): languages are compared by `languageCode` (`eng`, `en`, `en-US` → `en`); audio takes the first preferred language the stream has, avoiding commentary tracks; subtitles take full subtitles before SDH and forced ones, unless **Settings → Subtitles → Preferred type** puts SDH or forced ones first; "off" keeps only forced subtitles in the audio's language. Without a match the stream's default stays. Changes go through `selectAudioTrack` / `selectSubtitleTrack`, so they show in the log.
 

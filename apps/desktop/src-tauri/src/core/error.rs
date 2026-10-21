@@ -25,6 +25,12 @@ pub enum Error {
     /// The renderer cancelled the request (`addon_cancel_request`).
     #[error("The request was cancelled")]
     Cancelled,
+    /// The profile has a PIN, and none was given.
+    #[error("Enter this profile’s PIN")]
+    PinRequired,
+    /// The PIN given isn't the profile's. Never says what it is.
+    #[error("That PIN isn’t right")]
+    WrongPin,
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -46,6 +52,8 @@ impl Error {
             Self::Database(_) => "DATABASE_ERROR",
             Self::Stremio(_) => "STREMIO_ERROR",
             Self::Cancelled => "CANCELLED",
+            Self::PinRequired => "PIN_REQUIRED",
+            Self::WrongPin => "WRONG_PIN",
         }
     }
 
@@ -58,7 +66,7 @@ impl Error {
             Self::Addon(error) => error.to_string(),
             // Written for the user; never include credentials or Stremio's text.
             Self::Stremio(error) => error.to_string(),
-            Self::Cancelled => self.to_string(),
+            Self::Cancelled | Self::PinRequired | Self::WrongPin => self.to_string(),
             Self::Io(_) | Self::Tauri(_) | Self::Database(_) | Self::Internal(_) => {
                 "An internal error occurred".to_owned()
             }

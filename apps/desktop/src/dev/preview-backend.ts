@@ -13,9 +13,15 @@
  *   subtitles stand in for it), so "Restore default addons" has something
  *   to put back;
  * - the library is kept in memory, seeded with a few titles;
+ * - profiles: one, "Me", to start with, as in a fresh install. Set
+ *   `localStorage['kiro.preview.profiles']` to `family` for three ("Me" with
+ *   the seeded library, "Sam" with a little of their own, and "Kids", locked
+ *   with the PIN 1234), so "Who’s watching?" shows at launch. Each profile
+ *   has its own library and settings; new ones are kept until a reload;
  * - the player is imitated by `preview-player.ts`: no video, but real
  *   controls, tracks and events over a still picture;
- * - settings are kept in `localStorage['kiro.preview.settings']`, so they
+ * - settings are kept in `localStorage['kiro.preview.settings']` (the first
+ *   profile's; `kiro.preview.settings.<id>` for the others), so they
  *   (Discover's rows, for one) survive a reload; remove it to start over.
  *   The library's "mark as watched" threshold follows them, and window
  *   fullscreen uses the page's Fullscreen API;
@@ -41,6 +47,8 @@ import type {
   LibraryTitle,
   LibraryVideo,
   PlaybackProgress,
+  Profile,
+  ProfilesOverview,
   Settings,
   UpdateStatus,
   WatchlistItem,
@@ -459,10 +467,15 @@ const started = Date.now();
 
 const SETTINGS_KEY = 'kiro.preview.settings';
 
+/** Where a profile's settings are kept: the first profile's where they were before profiles. */
+function settingsKey(profile: number) {
+  return profile === 1 ? SETTINGS_KEY : `${SETTINGS_KEY}.${profile}`;
+}
+
 /** The saved settings, read like the core reads its file: what's missing is a default. */
-function storedSettings(): Settings {
+function storedSettings(profile = 1): Settings {
   try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
+    const stored = localStorage.getItem(settingsKey(profile));
     if (stored) return parseSettings(JSON.parse(stored));
   } catch {
     // Unreadable or blocked: start from the defaults.
@@ -470,9 +483,10 @@ function storedSettings(): Settings {
   return structuredClone(DEFAULT_SETTINGS);
 }
 
+/** The active profile's settings, watchlist and history (see Profiles below). */
 let settings: Settings = storedSettings();
 
-const watchlist: WatchlistItem[] = [
+let watchlist: WatchlistItem[] = [
   { title: title('movie', 'tt15239678', 'Dune: Part Two'), addedAt: started - 30 * MINUTE },
   { title: title('series', 'tt11280740', 'Severance'), addedAt: started - 90 * MINUTE },
   { title: title('movie', 'tt0816692', 'Interstellar'), addedAt: started - 300 * MINUTE },
@@ -492,7 +506,7 @@ function daysAgo(days: number, hour: number, minute = 0) {
 }
 
 /** Seeded so History shows each day group, series with several episodes and every action. */
-const history: HistoryEntry[] = [
+let history: HistoryEntry[] = [
   // Today: an episode in progress, after the two before it.
   ...(
     [
@@ -687,7 +701,7 @@ const windowHandlers: Record<string, (args: Args) => unknown> = {
   settings_set: ({ settings: next }) => {
     settings = structuredClone(next as Settings);
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      localStorage.setItem(settingsKey(activeProfile), JSON.stringify(settings));
     } catch {
       // Private window or blocked storage: kept for this page only.
     }
@@ -810,8 +824,194 @@ const stremioHandlers: Record<string, (args: Args) => unknown> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------------------
+
+interface PreviewProfile {
+  profile: Profile;
+  /** Kept as typed: this is the preview, not the core (which only keeps a hash). */
+  pin: string | null;
+  lastUsed: number;
+  watchlist: WatchlistItem[];
+  history: HistoryEntry[];
+  settings: Settings;
+}
+
+const NAME_LIMIT = 20;
+const PROFILE_LIMIT = 8;
+
+const previewProfiles: PreviewProfile[] = [
+  {
+    profile: { id: 1, name: 'Me', avatar: 'violet', hasPin: false, createdAt: started },
+    pin: null,
+    lastUsed: 0,
+    watchlist,
+    history,
+    settings,
+  },
+];
+let activeProfile = 1;
+let showPicker = true;
+let nextProfileId = 2;
+
+function addPreviewProfile(
+  name: string,
+  avatar: string,
+  pin: string | null,
+  seed: Pick<PreviewProfile, 'watchlist' | 'history'> = { watchlist: [], history: [] },
+) {
+  const id = nextProfileId++;
+  previewProfiles.push({
+    profile: { id, name, avatar, hasPin: pin !== null, createdAt: Date.now() },
+    pin,
+    lastUsed: 0,
+    ...seed,
+    settings: storedSettings(id),
+  });
+  return id;
+}
+
+if (readPreviewSetting('kiro.preview.profiles') === 'family') {
+  addPreviewProfile('Sam', 'teal', null, {
+    watchlist: [
+      { title: title('series', 'tt14452776', 'The Bear'), addedAt: started - 60 * MINUTE },
+    ],
+    history: [
+      progressEntry(
+        { title: title('movie', 'tt0245429', 'Spirited Away'), video: movie('tt0245429') },
+        3_100,
+        7_500,
+        daysAgo(1, 19, 0),
+      ),
+    ],
+  });
+  addPreviewProfile('Kids', 'amber', '1234');
+}
+
+function overviewOfProfiles(): ProfilesOverview {
+  return {
+    profiles: previewProfiles.map((entry) => ({ ...entry.profile, hasPin: entry.pin !== null })),
+    active: activeProfile,
+    showPicker,
+  };
+}
+
+function findProfile(id: unknown): PreviewProfile {
+  const found = previewProfiles.find((entry) => entry.profile.id === id);
+  if (!found) throw commandError('INVALID_ARGUMENT', 'That profile doesn’t exist');
+  return found;
+}
+
+/** As the core: a missing or wrong PIN, for a locked profile. */
+function unlock(entry: PreviewProfile, pin: unknown) {
+  if (entry.pin === null) return;
+  if (typeof pin !== 'string') throw commandError('PIN_REQUIRED', 'Enter this profile’s PIN');
+  if (pin !== entry.pin) throw commandError('WRONG_PIN', 'That PIN isn’t right');
+}
+
+/** A locked profile other than the active one is changed with its PIN. */
+function unlockToChange(entry: PreviewProfile, pin: unknown) {
+  if (entry.profile.id !== activeProfile) unlock(entry, pin);
+}
+
+function checkName(name: unknown, except?: number): string {
+  const trimmed = String(name).trim();
+  if (!trimmed) throw commandError('INVALID_ARGUMENT', 'Give the profile a name');
+  if ([...trimmed].length > NAME_LIMIT) {
+    throw commandError(
+      'INVALID_ARGUMENT',
+      `A profile name can be at most ${NAME_LIMIT} characters`,
+    );
+  }
+  const lower = trimmed.toLowerCase();
+  if (
+    previewProfiles.some(
+      (entry) => entry.profile.id !== except && entry.profile.name.toLowerCase() === lower,
+    )
+  ) {
+    throw commandError('INVALID_ARGUMENT', 'Another profile already has that name');
+  }
+  return trimmed;
+}
+
+function checkPin(pin: unknown): string | null {
+  if (pin === null || pin === undefined) return null;
+  if (typeof pin !== 'string' || !/^[0-9]{4}$/.test(pin)) {
+    throw commandError('INVALID_ARGUMENT', 'A PIN is 4 digits');
+  }
+  return pin;
+}
+
+/** Points the library and settings handlers at another profile's. */
+function activate(entry: PreviewProfile) {
+  activeProfile = entry.profile.id;
+  ({ watchlist, history, settings } = entry);
+}
+
+const profileHandlers: Record<string, (args: Args) => unknown> = {
+  profile_list: () => overviewOfProfiles(),
+  profile_create: ({ name, avatar, pin }) => {
+    if (previewProfiles.length >= PROFILE_LIMIT) {
+      throw commandError('INVALID_ARGUMENT', `There can be at most ${PROFILE_LIMIT} profiles`);
+    }
+    addPreviewProfile(checkName(name), String(avatar), checkPin(pin));
+    return overviewOfProfiles();
+  },
+  profile_rename: ({ id, name, pin }) => {
+    const entry = findProfile(id);
+    unlockToChange(entry, pin);
+    entry.profile = { ...entry.profile, name: checkName(name, entry.profile.id) };
+    return overviewOfProfiles();
+  },
+  profile_set_avatar: ({ id, avatar, pin }) => {
+    const entry = findProfile(id);
+    unlockToChange(entry, pin);
+    entry.profile = { ...entry.profile, avatar: String(avatar) };
+    return overviewOfProfiles();
+  },
+  profile_set_pin: ({ id, newPin, pin }) => {
+    const entry = findProfile(id);
+    unlockToChange(entry, pin);
+    entry.pin = checkPin(newPin);
+    return overviewOfProfiles();
+  },
+  profile_delete: ({ id }) => {
+    const entry = findProfile(id);
+    if (entry.profile.id === activeProfile) {
+      throw commandError('INVALID_ARGUMENT', 'Switch to another profile to delete this one');
+    }
+    if (previewProfiles.length <= 1) {
+      throw commandError('INVALID_ARGUMENT', 'The last profile can’t be deleted');
+    }
+    previewProfiles.splice(previewProfiles.indexOf(entry), 1);
+    try {
+      localStorage.removeItem(settingsKey(entry.profile.id));
+    } catch {
+      // Blocked storage: nothing was kept.
+    }
+    return overviewOfProfiles();
+  },
+  profile_switch: async ({ id, pin }) => {
+    const entry = findProfile(id);
+    // A moment, as the core takes to check a PIN.
+    if (entry.pin !== null) await delay(250);
+    unlock(entry, pin);
+    entry.lastUsed = Date.now();
+    activate(entry);
+    stremioAccountRead = false;
+    return overviewOfProfiles();
+  },
+  profile_set_show_picker: ({ show }) => {
+    if (typeof show !== 'boolean') throw commandError('INVALID_ARGUMENT', 'Expected true or false');
+    showPicker = show;
+    return overviewOfProfiles();
+  },
+};
+
 const handlers: Record<string, (args: Args) => unknown> = {
   ...stremioHandlers,
+  ...profileHandlers,
   ...updateHandlers,
   ...playerHandlers,
   ...windowHandlers,

@@ -34,7 +34,7 @@ Changes are saved as they are made. With the keys or a remote, the arrows move b
 
 ## How layouts are kept
 
-Layouts are saved by the core in `settings.json` (format 3), section `rows`, one list per page (`discover`, `movies`, `tvShows`). `null` means the default. Each entry names a catalogue by **addon id, content type and catalogue id**, with a `hidden` flag:
+Layouts are saved by the core in the active profile's `settings.json` (format 3; each profile has its own rows, while addons are shared), section `rows`, one list per page (`discover`, `movies`, `tvShows`). `null` means the default. Each entry names a catalogue by **addon id, content type and catalogue id**, with a `hidden` flag:
 
 ```json
 "rows": {

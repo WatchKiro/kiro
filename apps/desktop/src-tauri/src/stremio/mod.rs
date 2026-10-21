@@ -28,7 +28,7 @@ pub use data::{AddonStatus, StremioAddon};
 
 use crate::addons::registry::InstalledAddon;
 use crate::core::error::{Error, Result};
-use crate::library::{ImportCounts, Library};
+use crate::library::{ImportCounts, ProfileLibrary};
 use data::LibraryImport;
 
 /// What a Stremio account holds, as Kiro would import it.
@@ -120,7 +120,7 @@ impl StremioImport {
     /// Merges the chosen parts of the fetched library, then forgets it.
     pub fn apply_library(
         &self,
-        library: &Library,
+        library: &ProfileLibrary<'_>,
         choice: LibraryChoice,
     ) -> Result<LibraryImportSummary> {
         let pending = self
@@ -169,7 +169,8 @@ mod tests {
     use crate::addons::AddonUrl;
     use crate::addons::defaults::default_addons;
     use crate::addons::registry::AddonRegistry;
-    use crate::library::COMPLETED_FRACTION;
+    use crate::library::{COMPLETED_FRACTION, Library};
+    use crate::profiles::FIRST_PROFILE;
     use crate::settings::SettingsStore;
     use crate::storage::database::Database;
     use crate::storage::database::tests::temp_dir;
@@ -350,7 +351,8 @@ mod tests {
         );
         // Nothing was fetched, so there is nothing to import.
         let dir = temp_dir("stremio-nothing");
-        let library = Library::new(Database::new(&dir));
+        let all = Library::new(Arc::new(Database::new(&dir)));
+        let library = all.profile(FIRST_PROFILE);
         assert!(
             import
                 .apply_library(&library, LibraryChoice::default())
@@ -420,7 +422,8 @@ mod tests {
     fn applies_only_the_chosen_parts_once() {
         let (api, _) = fake_stremio();
         let dir = temp_dir("stremio-apply");
-        let library = Library::new(Database::new(&dir));
+        let all = Library::new(Arc::new(Database::new(&dir)));
+        let library = all.profile(FIRST_PROFILE);
         let import = StremioImport::default();
         let fetch = || {
             block_on(import.fetch(
@@ -512,7 +515,8 @@ mod tests {
         // The app's real stores, in one directory: addons, settings, library.
         let registry = AddonRegistry::new(&dir).with_defaults(default_addons());
         let settings = SettingsStore::new(&dir);
-        let library = Library::new(Database::new(&dir));
+        let all = Library::new(Arc::new(Database::new(&dir)));
+        let library = all.profile(FIRST_PROFILE);
         let import = StremioImport::default();
 
         for sign_in_with in [

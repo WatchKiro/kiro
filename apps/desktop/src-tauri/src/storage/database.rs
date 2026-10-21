@@ -22,7 +22,10 @@ pub const FILE_NAME: &str = "kiro.sqlite3";
 /// Schema migrations, applied in order. Never edit or remove a released
 /// migration: add a new one. Migration `n` (1-based) moves `user_version`
 /// from `n - 1` to `n`.
-const MIGRATIONS: &[&str] = &[include_str!("migrations/0001_library.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/0001_library.sql"),
+    include_str!("migrations/0002_profiles.sql"),
+];
 
 #[derive(Debug)]
 pub struct Database {
@@ -138,6 +141,16 @@ pub(crate) mod tests {
         dir
     }
 
+    /// The tables of the latest schema (`sqlite_sequence` is SQLite's, for
+    /// `profiles`' AUTOINCREMENT).
+    const LATEST_TABLES: [&str; 5] = [
+        "history",
+        "profile_options",
+        "profiles",
+        "sqlite_sequence",
+        "watchlist",
+    ];
+
     fn user_version(database: &Database) -> i64 {
         database
             .with(|c| Ok(c.query_row("PRAGMA user_version", [], |row| row.get(0))?))
@@ -165,7 +178,7 @@ pub(crate) mod tests {
 
         assert_eq!(user_version(&database), schema_version(MIGRATIONS.len()));
         assert!(dir.join(FILE_NAME).exists());
-        assert_eq!(tables(&database), ["history", "watchlist"]);
+        assert_eq!(tables(&database), LATEST_TABLES);
 
         // Reopening (a restart) does not re-run migrations.
         drop(database);
@@ -189,7 +202,9 @@ pub(crate) mod tests {
 
         let database = Database::new(&dir);
         assert_eq!(user_version(&database), schema_version(MIGRATIONS.len()));
-        assert_eq!(tables(&database), ["history", "keep", "watchlist"]);
+        let mut expected = LATEST_TABLES.to_vec();
+        expected.insert(1, "keep");
+        assert_eq!(tables(&database), expected);
         drop(database);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -225,6 +240,201 @@ pub(crate) mod tests {
         assert_eq!(user_version(&database), schema_version(MIGRATIONS.len()));
         assert!(dir.join("kiro.sqlite3.corrupt").exists());
         drop(database);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A database as Kiro 0.1 left it (schema version 1), with a library
+    /// shaped like a real one: a watchlist, films and a series' episodes,
+    /// finished and unfinished, with and without posters and episode names.
+    fn version_1_database(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        let mut connection = Connection::open(dir.join(FILE_NAME)).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(MIGRATIONS[0]).unwrap();
+        transaction.pragma_update(None, "user_version", 1).unwrap();
+        transaction
+            .execute_batch(
+                "INSERT INTO watchlist VALUES
+                     ('movie', 'tt15239678', 'Dune: Part Two', 'https://img.example/dune.jpg', 1700000000000),
+                     ('series', 'tt11280740', 'Severance', NULL, 1700000500000);
+                 INSERT INTO history VALUES
+                     ('movie', 'tt1375666', 'tt1375666', 'Inception', 'https://img.example/inception.jpg',
+                      NULL, NULL, NULL, 4310.5, 8880.0, 0, 1700001000000),
+                     ('series', 'tt0903747', 'tt0903747:2:3', 'Breaking Bad', NULL,
+                      2, 3, 'Bit by a Dead Bee', 2820.0, 2820.0, 1, 1700002000000),
+                     ('series', 'tt0903747', 'tt0903747:2:4', 'Breaking Bad', NULL,
+                      2, 4, 'Down', 1820.25, 2820.0, 0, 1700003000000);",
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+    }
+
+    fn dump(database: &Database, sql: &str) -> Vec<Vec<String>> {
+        database
+            .with(|c| {
+                let mut statement = c.prepare(sql)?;
+                let columns = statement.column_count();
+                let rows = statement
+                    .query_map([], |row| {
+                        (0..columns)
+                            .map(|i| {
+                                Ok(match row.get_ref(i)? {
+                                    rusqlite::types::ValueRef::Null => "NULL".to_owned(),
+                                    rusqlite::types::ValueRef::Integer(n) => n.to_string(),
+                                    rusqlite::types::ValueRef::Real(n) => n.to_string(),
+                                    rusqlite::types::ValueRef::Text(text) => {
+                                        String::from_utf8_lossy(text).into_owned()
+                                    }
+                                    rusqlite::types::ValueRef::Blob(_) => "BLOB".to_owned(),
+                                })
+                            })
+                            .collect()
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn profiles_migration_moves_the_library_into_the_first_profile_intact() {
+        let dir = temp_dir("database");
+        version_1_database(&dir);
+        // Opened lazily: still at version 1 until first used.
+        let migrated = Database::new(&dir);
+        // Read at version 1 by hand, as the migration must keep it.
+        let watchlist_before = {
+            let connection = Connection::open(dir.join(FILE_NAME)).unwrap();
+            let mut statement = connection
+                .prepare("SELECT type, id, name, poster, added_at FROM watchlist ORDER BY type, id")
+                .unwrap();
+            let rows: Vec<String> = statement
+                .query_map([], |row| {
+                    Ok(format!(
+                        "{}|{}|{}|{:?}|{}",
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(watchlist_before.len(), 2);
+
+        // Opening migrates.
+        assert_eq!(user_version(&migrated), schema_version(MIGRATIONS.len()));
+        assert_eq!(
+            dump(&migrated, "SELECT id, name, avatar, pin_hash FROM profiles"),
+            [["1", "Me", "violet", "NULL"]]
+        );
+        assert_eq!(
+            dump(&migrated, "SELECT show_picker FROM profile_options"),
+            [["1"]]
+        );
+        let watchlist_after: Vec<String> = dump(
+            &migrated,
+            "SELECT type, id, name, poster, added_at, profile_id FROM watchlist ORDER BY type, id",
+        )
+        .into_iter()
+        .map(|row| {
+            assert_eq!(row[5], "1", "in the first profile");
+            let poster = if row[3] == "NULL" {
+                "None".to_owned()
+            } else {
+                format!("Some({:?})", row[3])
+            };
+            format!("{}|{}|{}|{}|{}", row[0], row[1], row[2], poster, row[4])
+        })
+        .collect();
+        assert_eq!(watchlist_after, watchlist_before);
+        assert_eq!(
+            dump(
+                &migrated,
+                "SELECT profile_id, type, id, video_id, name, poster, season, episode, video_name,
+                        position, duration, completed, updated_at
+                 FROM history ORDER BY updated_at"
+            ),
+            [
+                [
+                    "1",
+                    "movie",
+                    "tt1375666",
+                    "tt1375666",
+                    "Inception",
+                    "https://img.example/inception.jpg",
+                    "NULL",
+                    "NULL",
+                    "NULL",
+                    "4310.5",
+                    "8880",
+                    "0",
+                    "1700001000000"
+                ],
+                [
+                    "1",
+                    "series",
+                    "tt0903747",
+                    "tt0903747:2:3",
+                    "Breaking Bad",
+                    "NULL",
+                    "2",
+                    "3",
+                    "Bit by a Dead Bee",
+                    "2820",
+                    "2820",
+                    "1",
+                    "1700002000000"
+                ],
+                [
+                    "1",
+                    "series",
+                    "tt0903747",
+                    "tt0903747:2:4",
+                    "Breaking Bad",
+                    "NULL",
+                    "2",
+                    "4",
+                    "Down",
+                    "1820.25",
+                    "2820",
+                    "0",
+                    "1700003000000"
+                ],
+            ]
+        );
+        // The indexes lead with the profile.
+        assert_eq!(
+            dump(
+                &migrated,
+                "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND sql IS NOT NULL
+                 ORDER BY name"
+            )
+            .into_iter()
+            .map(|row| row[0].clone())
+            .collect::<Vec<_>>(),
+            ["history_by_updated_at", "watchlist_by_added_at"]
+        );
+        // Deleting the profile would take its library with it.
+        assert_eq!(
+            dump(
+                &migrated,
+                "SELECT \"table\", on_delete FROM pragma_foreign_key_list('history')"
+            ),
+            [["profiles", "CASCADE"]]
+        );
+        assert!(
+            dump(&migrated, "PRAGMA foreign_key_check").is_empty(),
+            "no orphaned rows"
+        );
+        drop(migrated);
         fs::remove_dir_all(dir).unwrap();
     }
 }

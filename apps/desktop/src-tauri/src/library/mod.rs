@@ -4,10 +4,14 @@
 //! Entries carry a snapshot of the title's display data (name, poster) so the
 //! Library and "Continue watching" render without asking an addon.
 //!
+//! Every row belongs to a profile (`crate::profiles`): [`Library::profile`]
+//! reads and writes one profile's rows only.
+//!
 //! - [`types`] — validated inputs and the records returned to the renderer
 
 pub mod types;
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{OptionalExtension, Row, params};
@@ -15,6 +19,7 @@ use rusqlite::{OptionalExtension, Row, params};
 pub use types::*;
 
 use crate::core::error::{Error, Result};
+use crate::profiles::ProfileId;
 use crate::storage::database::Database;
 
 /// Watched at least this fraction of the video: counted as finished, so it
@@ -24,6 +29,7 @@ pub const COMPLETED_FRACTION: f64 = 0.9;
 /// Progress before this point (seconds) is not worth resuming.
 pub const MIN_RESUME_SECONDS: f64 = 15.0;
 
+/// Per profile.
 pub const MAX_WATCHLIST_ITEMS: i64 = 10_000;
 pub const DEFAULT_LIST_LIMIT: u32 = 100;
 pub const MAX_LIST_LIMIT: u32 = 1_000;
@@ -35,29 +41,50 @@ const HISTORY_COLUMNS: &str = "type, id, video_id, name, poster, season, episode
 
 #[derive(Debug)]
 pub struct Library {
-    database: Database,
+    database: Arc<Database>,
     /// Current time in Unix milliseconds; replaced in tests.
     clock: fn() -> i64,
 }
 
 impl Library {
-    pub fn new(database: Database) -> Self {
+    pub fn new(database: Arc<Database>) -> Self {
         Self {
             database,
             clock: now_millis,
         }
     }
 
+    /// One profile's watchlist and history.
+    pub fn profile(&self, profile: ProfileId) -> ProfileLibrary<'_> {
+        ProfileLibrary {
+            database: &self.database,
+            clock: self.clock,
+            profile: profile.get(),
+        }
+    }
+}
+
+/// One profile's library: every query reads and writes that profile's rows.
+#[derive(Debug)]
+pub struct ProfileLibrary<'a> {
+    database: &'a Database,
+    clock: fn() -> i64,
+    /// `profile_id` in the tables.
+    profile: i64,
+}
+
+impl ProfileLibrary<'_> {
     // --- Watchlist -------------------------------------------------------------
 
     /// Watchlist items, most recently added first.
     pub fn watchlist(&self) -> Result<Vec<WatchlistItem>> {
         self.database.with(|connection| {
             let mut statement = connection.prepare(
-                "SELECT type, id, name, poster, added_at FROM watchlist ORDER BY added_at DESC",
+                "SELECT type, id, name, poster, added_at FROM watchlist WHERE profile_id = ?1
+                 ORDER BY added_at DESC",
             )?;
             let items = statement
-                .query_map([], |row| {
+                .query_map([self.profile], |row| {
                     Ok(WatchlistItem {
                         title: TitleSnapshot {
                             r#type: MediaType::from_db(row.get(0)?),
@@ -79,30 +106,24 @@ impl Library {
         let now = (self.clock)();
         self.database.with(|connection| {
             let transaction = connection.transaction()?;
-            let listed = transaction
-                .query_row(
-                    "SELECT 1 FROM watchlist WHERE type = ?1 AND id = ?2",
-                    params![title.r#type.as_str(), title.id.as_str()],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            let count: i64 =
-                transaction.query_row("SELECT COUNT(*) FROM watchlist", [], |row| row.get(0))?;
+            let listed = is_listed(&transaction, self.profile, &title.r#type, &title.id)?;
+            let count = watchlist_count(&transaction, self.profile)?;
             if !listed && count >= MAX_WATCHLIST_ITEMS {
                 return Err(Error::invalid_argument("Your watchlist is full"));
             }
             let added_at: i64 = transaction.query_row(
-                "INSERT INTO watchlist (type, id, name, poster, added_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT (type, id) DO UPDATE SET name = excluded.name, poster = excluded.poster
+                "INSERT INTO watchlist (profile_id, type, id, name, poster, added_at)
+                 VALUES (?6, ?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (profile_id, type, id) DO UPDATE SET
+                     name = excluded.name, poster = excluded.poster
                  RETURNING added_at",
                 params![
                     title.r#type.as_str(),
                     title.id.as_str(),
                     title.name.as_str(),
                     title.poster.as_ref().map(PosterUrl::as_str),
-                    now
+                    now,
+                    self.profile
                 ],
                 |row| row.get(0),
             )?;
@@ -114,8 +135,8 @@ impl Library {
     pub fn remove_from_watchlist(&self, r#type: &MediaType, id: &MediaId) -> Result<()> {
         self.database.with(|connection| {
             connection.execute(
-                "DELETE FROM watchlist WHERE type = ?1 AND id = ?2",
-                params![r#type.as_str(), id.as_str()],
+                "DELETE FROM watchlist WHERE profile_id = ?1 AND type = ?2 AND id = ?3",
+                params![self.profile, r#type.as_str(), id.as_str()],
             )?;
             Ok(())
         })
@@ -155,10 +176,11 @@ impl Library {
         };
         self.database.with(|connection| {
             connection.execute(
-                "INSERT INTO history (type, id, video_id, name, poster, season, episode, video_name,
-                                      position, duration, completed, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-                 ON CONFLICT (type, id, video_id) DO UPDATE SET
+                "INSERT INTO history (profile_id, type, id, video_id, name, poster, season,
+                                      episode, video_name, position, duration, completed,
+                                      updated_at)
+                 VALUES (?13, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT (profile_id, type, id, video_id) DO UPDATE SET
                      name = excluded.name, poster = excluded.poster, season = excluded.season,
                      episode = excluded.episode, video_name = excluded.video_name,
                      position = excluded.position, duration = excluded.duration,
@@ -176,6 +198,7 @@ impl Library {
                     entry.duration,
                     entry.completed,
                     entry.updated_at,
+                    self.profile,
                 ],
             )?;
             Ok(())
@@ -230,13 +253,14 @@ impl Library {
                      ) AS rank,
                      COUNT(*) OVER (PARTITION BY type, id) AS played_videos
                      FROM history
+                     WHERE profile_id = ?2
                  )
                  WHERE rank = 1 AND {filter}
                  ORDER BY updated_at DESC
                  LIMIT ?1"
             ))?;
             let entries = statement
-                .query_map([limit], read)?
+                .query_map(params![limit, self.profile], read)?
                 .collect::<rusqlite::Result<_>>()?;
             Ok(entries)
         })
@@ -246,21 +270,15 @@ impl Library {
     /// videos that has been played (newest first).
     pub fn title_state(&self, r#type: &MediaType, id: &MediaId) -> Result<TitleLibraryState> {
         self.database.with(|connection| {
-            let in_watchlist = connection
-                .query_row(
-                    "SELECT 1 FROM watchlist WHERE type = ?1 AND id = ?2",
-                    params![r#type.as_str(), id.as_str()],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
+            let in_watchlist = is_listed(connection, self.profile, r#type, id)?;
             let mut statement = connection.prepare(&format!(
-                "SELECT {HISTORY_COLUMNS} FROM history WHERE type = ?1 AND id = ?2
+                "SELECT {HISTORY_COLUMNS} FROM history
+                 WHERE profile_id = ?4 AND type = ?1 AND id = ?2
                  ORDER BY updated_at DESC LIMIT ?3"
             ))?;
             let progress = statement
                 .query_map(
-                    params![r#type.as_str(), id.as_str(), MAX_TITLE_VIDEOS],
+                    params![r#type.as_str(), id.as_str(), MAX_TITLE_VIDEOS, self.profile],
                     history_entry,
                 )?
                 .collect::<rusqlite::Result<_>>()?;
@@ -275,8 +293,8 @@ impl Library {
     pub fn remove_from_history(&self, r#type: &MediaType, id: &MediaId) -> Result<()> {
         self.database.with(|connection| {
             connection.execute(
-                "DELETE FROM history WHERE type = ?1 AND id = ?2",
-                params![r#type.as_str(), id.as_str()],
+                "DELETE FROM history WHERE profile_id = ?1 AND type = ?2 AND id = ?3",
+                params![self.profile, r#type.as_str(), id.as_str()],
             )?;
             Ok(())
         })
@@ -284,7 +302,7 @@ impl Library {
 
     pub fn clear_history(&self) -> Result<()> {
         self.database.with(|connection| {
-            connection.execute("DELETE FROM history", [])?;
+            connection.execute("DELETE FROM history WHERE profile_id = ?1", [self.profile])?;
             Ok(())
         })
     }
@@ -297,19 +315,10 @@ impl Library {
     pub fn import_watchlist(&self, items: &[WatchlistItem]) -> Result<ImportCounts> {
         self.database.with(|connection| {
             let transaction = connection.transaction()?;
-            let mut count: i64 =
-                transaction.query_row("SELECT COUNT(*) FROM watchlist", [], |row| row.get(0))?;
+            let mut count = watchlist_count(&transaction, self.profile)?;
             let mut counts = ImportCounts::default();
             for WatchlistItem { title, added_at } in items {
-                let listed = transaction
-                    .query_row(
-                        "SELECT 1 FROM watchlist WHERE type = ?1 AND id = ?2",
-                        params![title.r#type.as_str(), title.id.as_str()],
-                        |_| Ok(()),
-                    )
-                    .optional()?
-                    .is_some();
-                if listed {
+                if is_listed(&transaction, self.profile, &title.r#type, &title.id)? {
                     counts.skipped += 1;
                     continue;
                 }
@@ -318,9 +327,10 @@ impl Library {
                     continue;
                 }
                 transaction.execute(
-                    "INSERT INTO watchlist (type, id, name, poster, added_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO watchlist (profile_id, type, id, name, poster, added_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
+                        self.profile,
                         title.r#type.as_str(),
                         title.id.as_str(),
                         title.name.as_str(),
@@ -347,11 +357,13 @@ impl Library {
             for entry in entries {
                 let existing: Option<i64> = transaction
                     .query_row(
-                        "SELECT updated_at FROM history WHERE type = ?1 AND id = ?2 AND video_id = ?3",
+                        "SELECT updated_at FROM history
+                         WHERE profile_id = ?4 AND type = ?1 AND id = ?2 AND video_id = ?3",
                         params![
                             entry.title.r#type.as_str(),
                             entry.title.id.as_str(),
-                            entry.video.id.as_str()
+                            entry.video.id.as_str(),
+                            self.profile
                         ],
                         |row| row.get(0),
                     )
@@ -365,10 +377,11 @@ impl Library {
                     None => counts.added += 1,
                 }
                 transaction.execute(
-                    "INSERT INTO history (type, id, video_id, name, poster, season, episode,
-                                          video_name, position, duration, completed, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-                     ON CONFLICT (type, id, video_id) DO UPDATE SET
+                    "INSERT INTO history (profile_id, type, id, video_id, name, poster, season,
+                                          episode, video_name, position, duration, completed,
+                                          updated_at)
+                     VALUES (?13, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                     ON CONFLICT (profile_id, type, id, video_id) DO UPDATE SET
                          position = excluded.position, duration = excluded.duration,
                          completed = excluded.completed, updated_at = excluded.updated_at,
                          season = COALESCE(excluded.season, history.season),
@@ -386,6 +399,7 @@ impl Library {
                         entry.duration,
                         entry.completed,
                         entry.updated_at,
+                        self.profile,
                     ],
                 )?;
             }
@@ -393,6 +407,30 @@ impl Library {
             Ok(counts)
         })
     }
+}
+
+fn is_listed(
+    connection: &rusqlite::Connection,
+    profile: i64,
+    r#type: &MediaType,
+    id: &MediaId,
+) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM watchlist WHERE profile_id = ?1 AND type = ?2 AND id = ?3",
+            params![profile, r#type.as_str(), id.as_str()],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn watchlist_count(connection: &rusqlite::Connection, profile: i64) -> Result<i64> {
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM watchlist WHERE profile_id = ?1",
+        [profile],
+        |row| row.get(0),
+    )?)
 }
 
 /// Reads a row selected with [`HISTORY_COLUMNS`].
@@ -417,7 +455,7 @@ fn history_entry(row: &Row<'_>) -> rusqlite::Result<HistoryEntry> {
     })
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| {
@@ -434,6 +472,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::profiles::FIRST_PROFILE;
     use crate::storage::database::tests::temp_dir;
 
     /// A clock that advances by one second on every reading.
@@ -443,22 +482,40 @@ mod tests {
     }
 
     struct Fixture {
-        library: Library,
+        all: Library,
         dir: PathBuf,
     }
 
     impl Fixture {
         fn new() -> Self {
             let dir = temp_dir("library");
-            let library = Library {
-                database: Database::new(&dir),
+            let all = Library {
+                database: Arc::new(Database::new(&dir)),
                 clock: ticking_clock,
             };
-            Self { library, dir }
+            Self { all, dir }
         }
 
-        fn reopen(&self) -> Library {
-            Library::new(Database::new(&self.dir))
+        /// The first profile's library (the only one in these tests).
+        fn library(&self) -> ProfileLibrary<'_> {
+            self.all.profile(FIRST_PROFILE)
+        }
+
+        /// Reads the first profile's library from a fresh connection.
+        fn reopen(&self) -> Reopened {
+            Reopened(Library::new(Arc::new(Database::new(&self.dir))))
+        }
+    }
+
+    struct Reopened(Library);
+
+    impl Reopened {
+        fn watchlist(&self) -> Result<Vec<WatchlistItem>> {
+            self.0.profile(FIRST_PROFILE).watchlist()
+        }
+
+        fn history(&self, limit: Option<u32>) -> Result<Vec<HistoryTitle>> {
+            self.0.profile(FIRST_PROFILE).history(limit)
         }
     }
 
@@ -515,7 +572,7 @@ mod tests {
     #[test]
     fn watchlist_round_trips_newest_first() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         assert!(library.watchlist().unwrap().is_empty());
 
         library
@@ -550,7 +607,7 @@ mod tests {
     #[test]
     fn the_watched_threshold_applies_to_progress_as_it_is_saved() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         let movie = title("movie", "tt1", "Movie");
         // 85% watched.
         let saved = library
@@ -572,7 +629,7 @@ mod tests {
     #[test]
     fn continue_watching_follows_the_watched_threshold() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         let film = title("movie", "tt1", "Film");
         let show = title("series", "tt2", "Show");
         // Both 85% watched: unfinished at 90%, finished at 80%.
@@ -601,7 +658,7 @@ mod tests {
     #[test]
     fn records_progress_per_video_and_lists_titles_by_latest_activity() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         let movie = title("movie", "tt1", "Movie");
         let show = title("series", "tt2", "Show");
 
@@ -647,7 +704,7 @@ mod tests {
     #[test]
     fn continue_watching_keeps_series_between_episodes_but_skips_finished_films() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         let started = title("movie", "tt1", "Started");
         let barely = title("movie", "tt2", "Barely");
         let finished = title("movie", "tt3", "Finished");
@@ -681,7 +738,7 @@ mod tests {
     #[test]
     fn removes_and_clears_history() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         let show = title("series", "tt4", "Show");
         library
             .record_progress(progress(&show, "tt4:1:1", 100.0, 1400.0))
@@ -735,7 +792,7 @@ mod tests {
     #[test]
     fn imports_watchlist_items_without_touching_listed_ones() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         library
             .add_to_watchlist(title("movie", "tt1", "Kiro's name"))
             .unwrap();
@@ -776,7 +833,7 @@ mod tests {
     #[test]
     fn imported_progress_never_overwrites_newer_kiro_progress() {
         let fixture = Fixture::new();
-        let library = &fixture.library;
+        let library = &fixture.library();
         let film = title("movie", "tt1", "Film");
         let show = title("series", "tt2", "Show");
         // Kiro progress, saved "now" (the ticking clock starts in 2023).
@@ -838,7 +895,7 @@ mod tests {
     fn serializes_for_the_renderer() {
         let fixture = Fixture::new();
         let entry = fixture
-            .library
+            .library()
             .record_progress(
                 serde_json::from_value(json!({
                     "title": { "type": "series", "id": "tt4", "name": "Show" },

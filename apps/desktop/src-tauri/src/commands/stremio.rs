@@ -21,7 +21,7 @@ pub async fn stremio_import_fetch(
     let installed = state.addons().list()?;
     let threshold = state
         .settings()
-        .get()
+        .and_then(|settings| settings.get())
         .map(|settings| settings.playback.completed_fraction())
         .unwrap_or(COMPLETED_FRACTION);
     let api = StremioApi::new()?;
@@ -31,8 +31,8 @@ pub async fn stremio_import_fetch(
         .await?)
 }
 
-/// Imports the chosen parts of the fetched library, merging with Kiro's
-/// (newer Kiro progress wins), and forgets the fetched account.
+/// Imports the chosen parts of the fetched library into the active profile's,
+/// merging (newer Kiro progress wins), and forgets the fetched account.
 #[tauri::command]
 pub async fn stremio_import_library(
     choice: LibraryChoice,
@@ -40,7 +40,7 @@ pub async fn stremio_import_library(
 ) -> Result<LibraryImportSummary> {
     state
         .stremio_import()
-        .apply_library(state.library(), choice)
+        .apply_library(&state.library()?, choice)
 }
 
 /// Forgets a fetched account without importing it.

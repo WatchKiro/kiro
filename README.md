@@ -397,6 +397,10 @@ Zustand is used for state that is genuinely shared. `stores/ui-store.ts` holds t
 
 Discover, Movies and TV Shows show the enabled addons' catalogues as rows that load as they scroll into view. **Customise** chooses which rows appear and in what order; layouts are saved in the core's settings by addon id, catalogue type and catalogue id, so they survive restarts and addon updates. See [docs/discover.md](docs/discover.md).
 
+### Profiles
+
+People sharing a computer each get their own profile: their own watchlist, history, Continue watching and settings, picked on a "Who’s watching?" screen at launch, with an optional 4-digit PIN (a convenience lock, not security). Addons are shared. The library tables are keyed by profile and each profile has its own settings file; commands act on the active profile. See [docs/profiles.md](docs/profiles.md).
+
 ### Routing and performance
 
 React Router (data router). Discover is bundled eagerly as the start screen; every other section is a lazy route chunk. Fonts are the operating system's own, so nothing is downloaded at startup and the app works offline.

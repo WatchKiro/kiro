@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-profile-set-show-picker"
+description = "Enables the profile_set_show_picker command without any pre-configured scope."
+commands.allow = ["profile_set_show_picker"]
+
+[[permission]]
+identifier = "deny-profile-set-show-picker"
+description = "Denies the profile_set_show_picker command without any pre-configured scope."
+commands.deny = ["profile_set_show_picker"]

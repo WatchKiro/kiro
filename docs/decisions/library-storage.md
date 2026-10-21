@@ -42,5 +42,9 @@ once and rewritten whole on the rare change. Library data is different:
   `history` (one row per played video, upserted with the latest position).
   Rows keep a snapshot of the title's name and poster so the Library renders
   without asking an addon.
+- Every row belongs to a profile (`profile_id`, leading both primary keys and
+  indexes; migration `0002_profiles.sql`). `Library::profile` gives a
+  `ProfileLibrary` whose queries see one profile's rows only, and commands use
+  the active profile's. See [profiles.md](../profiles.md).
 - Commands validate input at the boundary (`library::types`) and never expose
   SQL errors or paths to the renderer.

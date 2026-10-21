@@ -1,6 +1,6 @@
 # Import from Stremio
 
-Settings → Import from Stremio brings a Stremio account's addons, library and watch progress into Kiro in one go. A link on the Discover welcome screen leads there. Kiro has no first-run setup yet; when it gets one, it should offer this too.
+Settings → Import from Stremio brings a Stremio account's addons, library and watch progress into Kiro in one go. The library and progress go into the active profile; addons are shared by every profile ([profiles.md](profiles.md)). Switching profiles forgets an account read but not yet imported. A link on the Discover welcome screen leads there. Kiro has no first-run setup yet; when it gets one, it should offer this too.
 
 ## The flow
 

@@ -37,6 +37,11 @@ export interface SettingsState {
   /** Reads the settings once; later calls return them without asking again. */
   load: () => Promise<Settings>;
   /**
+   * Reads them again (another profile is now active). Saves still on their
+   * way are ignored; until the new settings arrive the old ones show.
+   */
+  reload: () => Promise<Settings>;
+  /**
    * Changes playback settings at once and saves them. A save the core refuses
    * puts back what was there before and sets `error`.
    */
@@ -58,6 +63,8 @@ export interface SettingsState {
 
 export function createSettingsStore(backend: SettingsBackend) {
   let loading: Promise<void> | null = null;
+  /** Bumped by `reload`, so a read for the profile before can't land after. */
+  let reads = 0;
   /** Latest save, so a slow earlier response can't overwrite a newer change. */
   let saves = 0;
 
@@ -83,10 +90,13 @@ export function createSettingsStore(backend: SettingsBackend) {
 
       async load() {
         loading ??= (async () => {
+          const read = reads;
           set({ status: 'loading', error: null });
           try {
-            set({ status: 'ready', settings: parseSettings(await backend.get()) });
+            const settings = parseSettings(await backend.get());
+            if (read === reads) set({ status: 'ready', settings });
           } catch (error) {
+            if (read !== reads) return;
             // Playback still works with the defaults; let a later call retry.
             loading = null;
             set({ status: 'error', error: describeError(error) });
@@ -95,6 +105,14 @@ export function createSettingsStore(backend: SettingsBackend) {
         await loading;
         // Changes saved since loading are in the store, not in the first response.
         return get().settings;
+      },
+
+      async reload() {
+        loading = null;
+        reads += 1;
+        saves += 1;
+        set({ status: 'idle', error: null });
+        return get().load();
       },
 
       updateGeneral: (patch) => save((settings) => withGeneral(settings, patch)),
