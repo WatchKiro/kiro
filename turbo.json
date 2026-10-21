@@ -18,6 +18,10 @@
       "passThroughEnv": [
         "KIRO_MPV",
         "KIRO_SPIKE_LOG",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "XDG_RUNTIME_DIR",
         "VITE_KIRO_SPIKE_AUTOPLAY",
         "VITE_KIRO_SPIKE_EXERCISE",
         "VITE_KIRO_SPIKE_SUBTITLE"
