@@ -103,8 +103,13 @@ fn talks_to_discord_s_ipc_socket() {
     let dir = std::env::temp_dir().join(format!("kiro-discord-ipc-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // SAFETY: this binary's only test sets it before starting any thread.
-    unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir) };
+    // The client looks for Discord's socket in each of these folders in turn
+    // (TMPDIR is where Discord puts it on macOS), so point them all here: a
+    // Discord running on the machine must not answer the test.
+    for key in ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"] {
+        // SAFETY: this binary's only test sets them before starting any thread.
+        unsafe { std::env::set_var(key, &dir) };
+    }
     let socket: PathBuf = dir.join("discord-ipc-0");
 
     let mut client = DiscordClient::new(APPLICATION_ID);
