@@ -85,7 +85,7 @@ function FirstRunSetup({ atLaunch }: { atLaunch: boolean }) {
 
   const importFromStremio = () => {
     finish('completed');
-    void navigate('/settings#stremio');
+    void navigate('/settings/import#stremio');
   };
 
   return (
