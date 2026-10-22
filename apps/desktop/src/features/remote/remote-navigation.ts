@@ -134,6 +134,19 @@ export function focusWithKeys(element: HTMLElement) {
   });
 }
 
+/**
+ * Up to the first item on a page scrolls the page back to its top, so what
+ * sits above that item (a banner, the page title) shows again instead of
+ * staying scrolled away under the header.
+ */
+function revealPageTop(target: HTMLElement) {
+  const page = target.closest('main');
+  if (!page || target.closest('header')) return;
+  const first = navigables(page).find((element) => !element.closest('header'));
+  if (first !== target) return;
+  page.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
+}
+
 /** The element arrows move from: what is focused, when it is on the page in `scope`. */
 function currentFocus(scope: Element): HTMLElement | undefined {
   const active = document.activeElement;
@@ -177,7 +190,10 @@ function move(direction: Direction): boolean {
   const next = active.closest('[data-nav-fallback]')
     ? choose(candidates)
     : (choose(candidates.filter((item) => !fallback(item))) ?? choose(candidates));
-  if (next) focusWithKeys(next.target);
+  if (next) {
+    focusWithKeys(next.target);
+    if (direction === 'up') revealPageTop(next.target);
+  }
   return Boolean(next);
 }
 

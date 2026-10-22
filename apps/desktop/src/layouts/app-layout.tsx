@@ -71,7 +71,9 @@ function Shell({ covered }: { covered: boolean }) {
       <main
         ref={mainRef}
         onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 8)}
-        className="relative min-w-0 flex-1 overflow-y-auto"
+        // Things scrolled into view (keyboard and remote focus) stop below the
+        // header that floats over the page, with room for their row's title.
+        className="relative min-w-0 flex-1 scroll-pt-28 scroll-pb-6 overflow-y-auto"
       >
         <Header solid={scrolled} />
         <Outlet />
