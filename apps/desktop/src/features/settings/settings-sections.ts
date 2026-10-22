@@ -276,9 +276,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionInfo[] = [
       ]),
       setting('prefer-hdr', 'Prefer HDR', 'Quality', ['dolby vision', 'hdr10']),
       setting('prefer-cached', 'Prefer cached streams', 'Quality', [
-        'debrid',
-        'real-debrid',
+        'ready',
         'instant',
+        'start at once',
       ]),
       setting('exclude-cam', 'Filter out cam releases', 'Filters', [
         'telesync',
