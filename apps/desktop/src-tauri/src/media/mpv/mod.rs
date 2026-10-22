@@ -300,7 +300,8 @@ pub enum PreviewResult {
     Superseded,
     /// Nothing can be previewed for this stream.
     Unavailable,
-    /// The stream is being opened in the preview core ([`PreviewKind::Warm`]).
+    /// [`PreviewKind::Warm`]: the stream was open in the preview core
+    /// already (a warm that opens it answers with the frame there).
     Warming,
 }
 
@@ -318,7 +319,8 @@ pub enum PreviewKind {
     /// One of a few spread over the video, made as it loads, to stand in
     /// anywhere on the bar: only while the player has plenty buffered.
     Storyboard,
-    /// No frame: open the stream in the preview core, for the first hover.
+    /// Open the stream in the preview core at `position`, ahead of the first
+    /// hover, and show the frame there (which opening reads anyway).
     Warm,
 }
 
@@ -519,8 +521,8 @@ impl MpvPlayer {
     /// playing. Refused ([`PreviewResult::Busy`]) while that could hold up
     /// playback ([`preview::could_stall_playback`]; a prefetch needs more
     /// buffered). Blocks while the frame is made: call it off the async
-    /// runtime. [`PreviewKind::Warm`] only opens the stream, and returns at
-    /// once.
+    /// runtime. [`PreviewKind::Warm`] opens the stream if it isn't open, at
+    /// `position`, and answers with the frame there.
     pub fn preview(&self, position: f64, kind: PreviewKind) -> PreviewResult {
         let demand = match kind {
             PreviewKind::Hover | PreviewKind::Warm => preview::HOVER,
@@ -538,11 +540,12 @@ impl MpvPlayer {
             }
             return PreviewResult::Busy;
         }
-        if kind == PreviewKind::Warm {
-            self.previewer.warm();
-            return PreviewResult::Warming;
-        }
-        match self.previewer.request(position) {
+        let outcome = if kind == PreviewKind::Warm {
+            self.previewer.warm(position)
+        } else {
+            self.previewer.request(position)
+        };
+        match outcome {
             Outcome::Frame(frame) => {
                 use base64::Engine as _;
                 let data = base64::engine::general_purpose::STANDARD.encode(&frame.jpeg);
@@ -552,6 +555,7 @@ impl MpvPlayer {
                 }
             }
             Outcome::Superseded => PreviewResult::Superseded,
+            Outcome::Warm => PreviewResult::Warming,
             Outcome::Unavailable => PreviewResult::Unavailable,
         }
     }

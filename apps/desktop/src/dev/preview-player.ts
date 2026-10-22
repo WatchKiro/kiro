@@ -101,6 +101,9 @@ let audioTrackId: string | null = null;
 let subtitleTrackId: string | null = null;
 /** Buffered from a seek, filling 3× faster than playback. */
 let buffered: { start: number; end: number } | null = null;
+let seekSettling = 0;
+/** The imitation preview core has the stream open. */
+let previewOpen = false;
 /** Subtitle files added so far, for unique track ids. */
 let added = 0;
 let subtitleDelay = 0;
@@ -195,6 +198,7 @@ function snapshot(): PlayerSnapshot {
     tracks,
     chapters,
     buffered: buffered ? [buffered] : [],
+    seeking: false,
     audioTrackId,
     subtitleTrackId,
     volume,
@@ -250,6 +254,7 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
       buffered = null;
       emit({ event: 'bufferedChange', payload: { ranges: [] } });
     }
+    previewOpen = false;
     setState('loading');
     if (source.searchParams.has('dead')) {
       showStill(false);
@@ -275,12 +280,20 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
   player_set_paused: ({ paused }) => setState(paused ? 'paused' : 'playing'),
   player_seek: ({ seconds }) => {
     position = Math.min(Math.max(Number(seconds), 0), DURATION);
+    // Seeking outside what's buffered starts the buffer again from there,
+    // and takes a moment, as reading the stream would.
+    const inBuffer = buffered && position >= buffered.start && position <= buffered.end;
+    emit({ event: 'seekingChange', payload: { seeking: true } });
     emit({ event: 'timeUpdate', payload: { position, duration } });
-    // Seeking outside what's buffered starts the buffer again from there.
-    if (!buffered || position < buffered.start || position > buffered.end) {
+    if (!inBuffer) {
       buffered = { start: position, end: Math.min(position + 2, DURATION) };
       emit({ event: 'bufferedChange', payload: { ranges: [buffered] } });
     }
+    window.clearTimeout(seekSettling);
+    seekSettling = window.setTimeout(
+      () => emit({ event: 'seekingChange', payload: { seeking: false } }),
+      inBuffer ? 120 : 900,
+    );
   },
   player_set_volume: ({ volume: next }) => {
     volume = Number(next);
@@ -356,9 +369,13 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
     } catch {
       // No storage: the default.
     }
-    if (kind === 'warm') return { status: 'warming' };
-    await new Promise((resolve) => window.setTimeout(resolve, mode === 'slow' ? 1500 : 180));
+    // Warming opens the stream (once) and shows the frame there.
+    if (kind === 'warm' && previewOpen) return { status: 'warming' };
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, mode === 'slow' ? 1500 : kind === 'warm' ? 700 : 180),
+    );
     if (mode === 'busy') return { status: 'busy' };
+    if (kind === 'warm') previewOpen = true;
     if (mode === 'tight' && kind !== 'hover') return { status: 'busy' };
     if (mode === 'unavailable' || duration === null) return { status: 'unavailable' };
     const keyframe = Math.floor(Math.min(Number(position), duration) / 4) * 4;

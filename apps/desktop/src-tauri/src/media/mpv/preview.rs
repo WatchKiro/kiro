@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use super::client::{self, Event, Mpv};
 use super::debug_log_enabled;
 use super::ffi::error as mpv_error;
-use super::preview_reader::{self, ReaderContext};
+use super::preview_reader::{self, OpeningCache, ReaderContext};
 
 /// Frees the preview core after this long without a request.
 const IDLE_RELEASE: Duration = Duration::from_secs(60);
@@ -60,6 +60,9 @@ pub enum Outcome {
     Frame(Frame),
     /// A newer request took its place before it started.
     Superseded,
+    /// [`Previewer::warm`]: the stream was open already (or is being opened
+    /// by a newer warm), so there is nothing to show for it.
+    Warm,
     /// Nothing to preview: no stream, one that can't be opened, or a seek
     /// that failed.
     Unavailable,
@@ -75,8 +78,8 @@ struct Queue {
     /// The stream the player has loaded, if previews can be made of it.
     source: Option<String>,
     pending: Option<Pending>,
-    /// Open the stream now, ahead of a request.
-    warm: bool,
+    /// Open the stream now, ahead of a request, at this position.
+    warm: Option<Pending>,
 }
 
 impl Queue {
@@ -92,14 +95,14 @@ impl Queue {
         if let Some(pending) = self.pending.take() {
             return Some(Job::Preview(pending));
         }
-        std::mem::take(&mut self.warm).then_some(Job::Warm)
+        self.warm.take().map(Job::Warm)
     }
 }
 
 /// What the worker thread does next.
 enum Job {
     Preview(Pending),
-    Warm,
+    Warm(Pending),
 }
 
 struct Shared {
@@ -145,11 +148,22 @@ impl Previewer {
         self.shared.wake.notify_one();
     }
 
-    /// Opens the stream in the preview core now, if it isn't open, so the
-    /// first preview asked for doesn't wait for that. Returns at once.
-    pub fn warm(&self) {
-        self.shared.queue().warm = true;
+    /// Opens the stream in the preview core now, if it isn't open, at
+    /// `position`, so the first preview asked for doesn't wait for that, and
+    /// returns the frame there (the opening reads it anyway). Blocks while
+    /// the stream opens; [`Outcome::Warm`] when it was open already.
+    pub fn warm(&self, position: f64) -> Outcome {
+        let (reply, answer) = mpsc::channel();
+        {
+            let mut queue = self.shared.queue();
+            if let Some(older) = queue.warm.replace(Pending { position, reply }) {
+                let _ = older.reply.send(Outcome::Warm);
+            }
+        }
         self.shared.wake.notify_one();
+        answer
+            .recv_timeout(REQUEST_TIMEOUT)
+            .unwrap_or(Outcome::Warm)
     }
 
     /// A preview at `position` seconds. Blocks until it is made, replaced by
@@ -194,6 +208,8 @@ struct Worker {
     failures: u32,
     /// Where frames are written by mpv and read back.
     dir: Option<PathBuf>,
+    /// The stream's opening bytes, kept across cores (`preview_reader.rs`).
+    opening: Arc<Mutex<OpeningCache>>,
 }
 
 impl Worker {
@@ -204,6 +220,7 @@ impl Worker {
             failed: None,
             failures: 0,
             dir: None,
+            opening: Arc::default(),
         }
     }
 
@@ -213,7 +230,7 @@ impl Worker {
                 let mut queue = self.shared.queue();
                 let idle_since = Instant::now();
                 while queue.pending.is_none()
-                    && !queue.warm
+                    && queue.warm.is_none()
                     && !self.shared.stop.load(Ordering::Acquire)
                 {
                     let waited = idle_since.elapsed();
@@ -258,26 +275,45 @@ impl Worker {
                     };
                     let _ = pending.reply.send(outcome);
                 }
-                Job::Warm => {
-                    if let Some(source) = source {
-                        self.ensure_open(&source);
-                    }
+                Job::Warm(pending) => {
+                    let outcome = match source {
+                        Some(source) => self.warm(&source, pending.position),
+                        None => Outcome::Unavailable,
+                    };
+                    let _ = pending.reply.send(outcome);
                 }
             }
         }
         // Answer anything still waiting, then free the core.
-        if let Some(pending) = self.shared.queue().pending.take() {
+        let mut queue = self.shared.queue();
+        if let Some(pending) = queue.pending.take() {
             let _ = pending.reply.send(Outcome::Unavailable);
         }
+        if let Some(pending) = queue.warm.take() {
+            let _ = pending.reply.send(Outcome::Warm);
+        }
+        drop(queue);
         self.core = None;
         if let Some(dir) = self.dir.take() {
             let _ = fs::remove_dir_all(dir);
         }
     }
 
-    /// Has `source` open in the core, unless it has failed before. Returns
-    /// whether it is.
-    fn ensure_open(&mut self, source: &str) -> bool {
+    /// Opens `source` at `position` if it isn't open, and previews there;
+    /// nothing to show if it was open already.
+    fn warm(&mut self, source: &str, position: f64) -> Outcome {
+        if self.core.as_ref().is_some_and(|core| core.source == source) {
+            return Outcome::Warm;
+        }
+        if !self.ensure_open(source, Some(position)) {
+            return Outcome::Unavailable;
+        }
+        self.preview(source, position)
+    }
+
+    /// Has `source` open in the core (from `start`, if given), unless it has
+    /// failed before. Returns whether it is.
+    fn ensure_open(&mut self, source: &str, start: Option<f64>) -> bool {
         if self.failed.as_deref() == Some(source) {
             return false;
         }
@@ -285,7 +321,7 @@ impl Worker {
             return true;
         }
         let started = Instant::now();
-        match self.open(source) {
+        match self.open(source, start) {
             Ok(core) => {
                 self.failed = None;
                 self.failures = 0;
@@ -305,7 +341,7 @@ impl Worker {
     }
 
     fn preview(&mut self, source: &str, position: f64) -> Outcome {
-        if !self.ensure_open(source) {
+        if !self.ensure_open(source, None) {
             return Outcome::Unavailable;
         }
         let Some(dir) = self.frames_dir() else {
@@ -361,15 +397,16 @@ impl Worker {
         }
     }
 
-    /// Opens `source` through the bounded reader, or, if the host doesn't
+    /// Opens `source` (from `start` seconds, if given: its first keyframe is
+    /// then one wanted) through the bounded reader, or, if the host doesn't
     /// serve ranges, with mpv's own reading.
-    fn open(&self, source: &str) -> Result<Core, Failure> {
+    fn open(&self, source: &str, start: Option<f64>) -> Result<Core, Failure> {
         // Debug builds: `KIRO_PREVIEW_READER=mpv` skips the bounded reader,
         // to compare what each downloads.
         let bounded = !(cfg!(debug_assertions)
             && std::env::var("KIRO_PREVIEW_READER").as_deref() == Ok("mpv"));
         if bounded {
-            match self.open_with(source, true) {
+            match self.open_with(source, true, start) {
                 Ok(core) => return Ok(core),
                 Err(error @ (Failure::Stopped | Failure::NoRanges)) => return Err(error),
                 Err(error) => {
@@ -379,13 +416,16 @@ impl Worker {
                 }
             }
         }
-        self.open_with(source, false)
+        self.open_with(source, false, start)
     }
 
-    fn open_with(&self, source: &str, bounded: bool) -> Result<Core, Failure> {
+    fn open_with(&self, source: &str, bounded: bool, start: Option<f64>) -> Result<Core, Failure> {
         let mpv = create_core()?;
+        if let Some(start) = start {
+            mpv.set_property("start", format!("{start:.3}").as_str())?;
+        }
         let reader = if bounded {
-            let context = ReaderContext::new().map_err(|_| Failure::Reader)?;
+            let context = ReaderContext::new(self.opening.clone()).map_err(|_| Failure::Reader)?;
             preview_reader::register(&mpv, &context)?;
             Some(context)
         } else {
@@ -408,13 +448,19 @@ impl Worker {
             return Err(Failure::NoRanges);
         }
         opened?;
-        if debug_log_enabled()
-            && let Some(reader) = &reader
-        {
-            eprintln!(
-                "[kiro-preview] opening read {} KB",
-                reader.bytes_read() / 1024
-            );
+        if let Some(reader) = &reader {
+            reader.opened();
+            if debug_log_enabled() {
+                eprintln!(
+                    "[kiro-preview] opening read {} KB ({} KB kept for next time)",
+                    reader.bytes_read() / 1024,
+                    self.opening
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .bytes()
+                        / 1024
+                );
+            }
         }
         Ok(Core {
             mpv,
@@ -790,14 +836,18 @@ mod tests {
     fn a_request_comes_before_warming() {
         let mut queue = Queue::default();
         assert!(queue.take().is_none());
-        queue.warm = true;
+        let (warm_reply, _warm) = mpsc::channel();
+        queue.warm = Some(Pending {
+            position: 5.0,
+            reply: warm_reply,
+        });
         let (reply, _answer) = mpsc::channel();
         queue.push(Pending {
             position: 10.0,
             reply,
         });
         assert!(matches!(queue.take(), Some(Job::Preview(_))));
-        assert!(matches!(queue.take(), Some(Job::Warm)));
+        assert!(matches!(queue.take(), Some(Job::Warm(pending)) if pending.position == 5.0));
         assert!(queue.take().is_none(), "warming is done once");
     }
 
@@ -941,24 +991,57 @@ mod tests {
     }
 
     #[test]
-    fn warming_opens_the_stream_ahead_of_the_first_request() {
+    fn warming_opens_the_stream_at_the_first_position_wanted() {
         let (url, sent) = serve(FIXTURE);
         let previewer = Previewer::new().unwrap();
         // Without a stream there is nothing to open.
-        previewer.warm();
-        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(previewer.warm(5.0), Outcome::Unavailable);
         assert_eq!(sent.load(Ordering::Relaxed), 0);
 
         previewer.set_source(Some(url));
-        previewer.warm();
-        let deadline = Instant::now() + OPEN_TIMEOUT;
-        while sent.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert!(sent.load(Ordering::Relaxed) > 0, "warming read the stream");
-        // Already open: the request only seeks and decodes.
-        let frame = frame(previewer.request(5.0));
-        assert!((frame.position - 4.0).abs() < 0.2);
+        // Opening at 5 s reads the keyframe at 4 s: that is the frame.
+        let warmed = frame(previewer.warm(5.0));
+        assert!((warmed.position - 4.0).abs() < 0.2, "{}", warmed.position);
+        let opened = sent.load(Ordering::Relaxed);
+        assert!(opened > 0);
+        // Open already: nothing more to show, and nothing read.
+        assert_eq!(previewer.warm(9.0), Outcome::Warm);
+        assert_eq!(sent.load(Ordering::Relaxed), opened);
+        // A request elsewhere only seeks and decodes.
+        let frame = frame(previewer.request(9.5));
+        assert!((frame.position - 8.0).abs() < 0.2);
+    }
+
+    #[test]
+    fn opening_again_reads_nothing_until_the_first_seek() {
+        let (url, sent) = serve(FIXTURE);
+        let shared = Arc::new(Shared {
+            queue: Mutex::default(),
+            wake: Condvar::new(),
+            stop: AtomicBool::new(false),
+        });
+        let mut worker = Worker::new(shared);
+        let core = worker.open(&url, None).unwrap();
+        let opened = sent.load(Ordering::Relaxed);
+        assert!(opened > 0);
+        drop(core);
+        // The core was freed (idle): the next opening is served from memory.
+        let core = worker.open(&url, None).unwrap();
+        assert_eq!(sent.load(Ordering::Relaxed), opened, "nothing read");
+        // Previews work as before (the fixture is small enough that opening
+        // read all of it, so they read nothing either).
+        let dir = worker.frames_dir().unwrap();
+        let (frame, _) = capture(
+            &core.mpv,
+            7.0,
+            &dir.join("frame.jpg"),
+            &worker.shared.stop,
+            core.reader.as_deref(),
+        )
+        .unwrap();
+        assert!((frame.position - 6.0).abs() < 0.2);
+        drop(core);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

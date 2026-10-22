@@ -23,6 +23,8 @@ export interface PlayerSnapshot {
   chapters: Chapter[];
   /** The parts of the file the player holds, where seeking is instant. */
   buffered: BufferedRange[];
+  /** Seeking (or restarting after a load): the picture isn't at `position` yet. */
+  seeking: boolean;
   audioTrackId: string | null;
   subtitleTrackId: string | null;
   /** 0 to `maxVolume`, where 1 is unity gain. */
@@ -59,13 +61,15 @@ export interface PlayerFailure {
 
 /**
  * Payloads as sent by Rust: `PlayerEventMap`, with errors as plain data, plus
- * `timingChange` and `bufferedChange`, which only the native player has.
+ * `timingChange`, `bufferedChange` and `seekingChange`, which only the native player has.
  */
 export type NativeEventMap = Omit<PlayerEventMap, 'error'> & {
   error: { error: PlayerFailure };
   timingChange: PlayerTiming;
   /** `PlayerEvent::BufferedChange`, at most once a second. */
   bufferedChange: { ranges: BufferedRange[] };
+  /** `PlayerEvent::SeekingChange`: from a seek until the picture is at the new position. */
+  seekingChange: { seeking: boolean };
 };
 
 /** Mirrors `media::model::PlayerEvent`: one `PlayerEventMap` entry. */

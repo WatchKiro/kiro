@@ -371,6 +371,15 @@ async function exercisePreviews(player: NativePlayer, navigate: (to: string) => 
   await Promise.all(
     [30, 50, 70].map((position) => previewCommand(position).catch(() => undefined)),
   );
-  await sleep(2000);
+  // A seek says so in the view until the picture is there.
+  const seekStarted = performance.now();
+  await step(() => player.seek(90));
+  while (player.getView().seeking && performance.now() - seekStarted < 5000) await sleep(10);
+  console.log(`[kiro-exercise] seek landed in ${Math.round(performance.now() - seekStarted)} ms`);
+  // Idle for a minute: the core is freed; the next preview opens the stream
+  // again from what was kept of its opening.
+  await sleep(65_000);
+  await previewCommand(40).catch(() => undefined);
+  await sleep(1000);
   void navigate('/');
 }

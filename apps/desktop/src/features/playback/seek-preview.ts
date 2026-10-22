@@ -160,6 +160,46 @@ export class PreviewCache {
   }
 }
 
+/** Streams whose previews are kept after leaving the player. */
+export const KEPT_STREAMS = 5;
+
+/**
+ * The previews of the last few streams, by stream, so coming back to one
+ * (resuming an episode, or Up next and back) starts with what was made.
+ * Kept for the session only; nothing is written to disk.
+ */
+export class PreviewCaches {
+  private readonly caches = new Map<string, PreviewCache>();
+
+  constructor(private readonly limit = KEPT_STREAMS) {}
+
+  /** The cache for `key` (a stream's URL and duration), made if new. */
+  get(key: string): PreviewCache {
+    const kept = this.caches.get(key);
+    if (kept) {
+      // Most recently used last.
+      this.caches.delete(key);
+      this.caches.set(key, kept);
+      return kept;
+    }
+    const cache = new PreviewCache();
+    this.caches.set(key, cache);
+    while (this.caches.size > this.limit) {
+      const oldest = this.caches.keys().next().value;
+      if (oldest === undefined) break;
+      this.caches.delete(oldest);
+    }
+    return cache;
+  }
+
+  get size(): number {
+    return this.caches.size;
+  }
+}
+
+/** The session's kept previews. */
+export const previewCaches = new PreviewCaches();
+
 /** A frame near the cell wanted (`PreviewCache.nearest`). */
 export interface PreviewNearest {
   frame: PreviewFrame;
@@ -308,15 +348,30 @@ export class PreviewScheduler {
   }
 
   /**
-   * The pointer reached the controls: has the core open the stream, so the
-   * first preview doesn't wait for that. Not more than once in
+   * The controls appeared: has the core open the stream, so the first
+   * preview doesn't wait for that. It opens at the first background cell
+   * still wanted (where playback started, usually), whose frame the opening
+   * reads anyway, so that comes back with it. Not more than once in
    * `WARM_INTERVAL_MS`, and not once the stream is known to be unpreviewable.
    */
   warm(): void {
     const now = this.now();
     if (!this.cache.available || now - this.warmedAt < WARM_INTERVAL_MS) return;
     this.warmedAt = now;
-    void this.request(0, 'warm').catch(() => undefined);
+    const target = this.queued.find((slot) => !this.cache.get(slot.index)) ?? {
+      index: 0,
+      position: 0,
+    };
+    void this.request(target.position, 'warm')
+      .then(
+        (value) => parsePlayerPreview(value),
+        () => null,
+      )
+      .then((result) => {
+        if (result?.status !== 'frame') return;
+        this.cache.record(target.index, result, this.now(), 'prefetch');
+        this.onResult();
+      });
   }
 
   /**

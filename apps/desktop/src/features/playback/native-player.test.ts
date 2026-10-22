@@ -15,6 +15,7 @@ const SNAPSHOT: PlayerSnapshot = {
   tracks: [],
   chapters: [],
   buffered: [],
+  seeking: false,
   audioTrackId: null,
   subtitleTrackId: null,
   volume: 1,
@@ -192,6 +193,37 @@ describe('NativePlayer', () => {
     assert.deepEqual(player.getView().buffered, ranges);
     emit({ event: 'bufferedChange', payload: { ranges: [] } });
     assert.deepEqual(player.getView().buffered, []);
+    // ...and whether it is seeking.
+    emit({ event: 'seekingChange', payload: { seeking: true } });
+    assert.equal(player.getView().seeking, true);
+    emit({ event: 'seekingChange', payload: { seeking: false } });
+    assert.equal(player.getView().seeking, false);
+  });
+
+  it('says where a seek is going until the picture is there', async () => {
+    const { bridge, calls, emit } = fakeBridge();
+    const player = NativePlayer.attach(bridge);
+    await player.ready;
+    const seek = player.seek(1234.5);
+    assert.deepEqual(
+      { seeking: player.getView().seeking, target: player.getView().seekTarget },
+      { seeking: true, target: 1234.5 },
+      'from the moment it is asked',
+    );
+    await seek;
+    assert.ok(calls.includes('seek 1234.5'));
+    emit({ event: 'seekingChange', payload: { seeking: true } });
+    assert.equal(player.getView().seekTarget, 1234.5);
+    emit({ event: 'seekingChange', payload: { seeking: false } });
+    assert.deepEqual(
+      { seeking: player.getView().seeking, target: player.getView().seekTarget },
+      { seeking: false, target: null },
+    );
+    // A seek the core refuses is over at once.
+    await player.seek(-5);
+    assert.equal(player.getView().seekTarget, 0, 'clamped');
+    emit({ event: 'seekingChange', payload: { seeking: false } });
+    assert.equal(player.getView().seekTarget, null);
   });
 
   it('turns failures into PlayerErrors', async () => {

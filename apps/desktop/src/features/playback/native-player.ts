@@ -46,6 +46,10 @@ export interface NativePlayerView {
   chapters: readonly Chapter[];
   /** Where seeking is instant: what the player holds, in order. */
   buffered: readonly BufferedRange[];
+  /** Seeking (or restarting after a load): the picture isn't at `position` yet. */
+  seeking: boolean;
+  /** Where the last `seek()` is taking the player, until its picture is there. */
+  seekTarget: number | null;
   audioTrackId: string | null;
   subtitleTrackId: string | null;
   volume: number;
@@ -118,6 +122,8 @@ export class NativePlayer implements MediaPlayer {
     tracks: [],
     chapters: [],
     buffered: [],
+    seeking: false,
+    seekTarget: null,
     audioTrackId: null,
     subtitleTrackId: null,
     volume: 1,
@@ -224,8 +230,18 @@ export class NativePlayer implements MediaPlayer {
     return this.call(() => this.bridge.setPaused(true));
   }
 
+  /**
+   * Seeks, and says so in the view (`seeking`, `seekTarget`) from now until
+   * the player's picture is at the new position, so the page can show
+   * something for it in the meantime.
+   */
   seek(seconds: number): Promise<void> {
-    return this.call(() => this.bridge.seek(Math.max(0, seconds)));
+    const target = Math.max(0, seconds);
+    this.update({ seeking: true, seekTarget: target });
+    return this.call(() => this.bridge.seek(target)).catch((error: unknown) => {
+      if (this.view.seekTarget === target) this.update({ seeking: false, seekTarget: null });
+      throw error;
+    });
   }
 
   setVolume(volume: number): Promise<void> {
@@ -395,6 +411,11 @@ export class NativePlayer implements MediaPlayer {
         return;
       case 'bufferedChange':
         this.update({ buffered: message.payload.ranges });
+        break;
+      case 'seekingChange':
+        this.update(
+          message.payload.seeking ? { seeking: true } : { seeking: false, seekTarget: null },
+        );
         return;
       case 'error':
         this.emitter.emit('error', { error: fromFailure(message.payload.error) });

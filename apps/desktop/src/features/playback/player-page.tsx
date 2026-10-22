@@ -73,7 +73,7 @@ import {
   type PlayerTiming,
   type TimingNotice,
 } from '@/features/playback/use-player-timing';
-import { useSeekPreview } from '@/features/playback/use-seek-preview';
+import { useSeekPreview, type SeekPreview } from '@/features/playback/use-seek-preview';
 import { useSkipParts } from '@/features/playback/use-skip-parts';
 import { useStreamSwitching, type StreamSwitching } from '@/features/playback/use-stream-switching';
 import { useSubtitleSources } from '@/features/playback/use-subtitle-sources';
@@ -546,6 +546,26 @@ function PlaybackSession({
   }, [canHide]);
   // Idle only counts while hiding is allowed (e.g. pausing shows the controls).
   const hidden = (idle && canHide) || manualHidden;
+  /** A frame of the video above the seek bar while hovering (Settings → Playback). */
+  const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
+  const previewStarts = useMemo(
+    () => [
+      ...(view?.chapters ?? []).map((chapter) => chapter.start),
+      ...chapterSkip.segments.map((part) => part.start),
+    ],
+    [view?.chapters, chapterSkip.segments],
+  );
+  const preview = useSeekPreview({
+    enabled: seekPreviews,
+    url: request?.url ?? null,
+    duration: view?.duration ?? null,
+    active: active && !hidden,
+    position: view?.position ?? 0,
+    starts: previewStarts,
+  });
+  /** While a seek lands: the frame nearest its target, over the video. */
+  const seekFrame =
+    view && view.seekTarget !== null && showingVideo ? preview.frameAt(view.seekTarget) : undefined;
 
   // Hidden controls give up focus, so keys can't press what can't be seen:
   // ←/→ seek again, and ↑/↓ start from Play once the controls are back.
@@ -627,6 +647,9 @@ function PlaybackSession({
           )}
         />
       )}
+
+      {/* The seek's target, until the picture is there */}
+      {view && <SeekOverlay frame={seekFrame} target={view.seekTarget} />}
 
       {/* Top bar */}
       <div
@@ -801,6 +824,7 @@ function PlaybackSession({
           subtitlesState={subtitles.state}
           position={scrub ?? view.position}
           onScrub={setScrub}
+          preview={preview}
           run={run}
           hidden={hidden}
           onMenuOpenChange={setMenuOpen}
@@ -854,6 +878,8 @@ interface ControlsProps {
   subtitlesState: SubtitleSourcesState;
   position: number;
   onScrub: (seconds: number | null) => void;
+  /** Seek-bar previews (`use-seek-preview.ts`). */
+  preview: SeekPreview;
   run: (action: Promise<unknown>) => void;
   /** Faded out while playing without input. */
   hidden: boolean;
@@ -878,6 +904,7 @@ function Controls({
   subtitlesState,
   position,
   onScrub,
+  preview,
   run,
   hidden,
   onMenuOpenChange,
@@ -907,19 +934,6 @@ function Controls({
   /** Dragging the seek bar (`seek-bar.ts`): one seek, on release. */
   const dragging = useRef(false);
   const drag = useRef<DragState>({ position: null });
-  /** A frame of the video above the seek bar while hovering (Settings → Playback). */
-  const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
-  const previewStarts = useMemo(
-    () => [...view.chapters.map((chapter) => chapter.start), ...segments.map((part) => part.start)],
-    [view.chapters, segments],
-  );
-  const preview = useSeekPreview({
-    enabled: seekPreviews,
-    duration: view.duration,
-    active: !hidden,
-    position: view.position,
-    starts: previewStarts,
-  });
   const trackHover = (event: PointerEvent<HTMLDivElement>) => {
     if (!view.duration) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -1086,6 +1100,40 @@ function Controls({
           </ControlButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A seek that hasn't landed by then shows its frame no longer: something is wrong. */
+const SEEK_OVERLAY_MAX_MS = 3000;
+
+/**
+ * Over the video from a seek until the player's picture is at the new
+ * position: the nearest frame the seek bar has for the target, softened,
+ * so the old picture isn't left hanging while the stream is read.
+ */
+function SeekOverlay({
+  frame,
+  target,
+}: {
+  frame: PreviewFrame | undefined;
+  target: number | null;
+}) {
+  const [expired, setExpired] = useState<number | null>(null);
+  useEffect(() => {
+    if (target === null) return;
+    const timer = window.setTimeout(() => setExpired(target), SEEK_OVERLAY_MAX_MS);
+    return () => window.clearTimeout(timer);
+  }, [target]);
+  if (!frame || target === null || expired === target) return null;
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden bg-black">
+      <img
+        src={frame.image}
+        alt=""
+        draggable={false}
+        className="size-full scale-105 animate-[kiro-fade-in_150ms_ease-out] object-contain blur-[2px]"
+      />
     </div>
   );
 }

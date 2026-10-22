@@ -152,6 +152,11 @@ pub enum PlayerEvent {
         volume: f64,
         muted: bool,
     },
+    /// Not part of `PlayerEventMap`: the player is seeking (or restarting
+    /// after a load) until its picture is back at the new position.
+    SeekingChange {
+        seeking: bool,
+    },
     /// Not part of `PlayerEventMap` in player-core: the native player's
     /// subtitle and audio delays (seconds) and speed (`1.0` is normal).
     #[serde(rename_all = "camelCase")]
@@ -178,6 +183,8 @@ pub struct PlayerSnapshot {
     pub tracks: Vec<MediaTrack>,
     pub chapters: Vec<Chapter>,
     pub buffered: Vec<BufferedRange>,
+    /// Seeking (or restarting after a load): the picture isn't at `position` yet.
+    pub seeking: bool,
     pub audio_track_id: Option<String>,
     pub subtitle_track_id: Option<String>,
     pub volume: f64,
@@ -216,6 +223,8 @@ pub enum Change {
     ChapterList(String),
     /// mpv's `demuxer-cache-state`, as JSON.
     CacheState(String),
+    /// mpv's `seeking`: true from a seek (or a load) until playback restarts.
+    Seeking(bool),
     /// mpv volume, 0–130.
     Volume(f64),
     Muted(bool),
@@ -257,6 +266,7 @@ pub struct PlayerModel {
     /// The same for `bufferedChange`.
     last_buffered_update: Option<Instant>,
     buffered_pending: bool,
+    seeking: bool,
 }
 
 impl Default for PlayerModel {
@@ -287,6 +297,7 @@ impl Default for PlayerModel {
             time_pending: false,
             last_buffered_update: None,
             buffered_pending: false,
+            seeking: false,
         }
     }
 }
@@ -318,6 +329,7 @@ impl PlayerModel {
             tracks: self.tracks.clone(),
             chapters: self.chapters.clone(),
             buffered: self.buffered.clone(),
+            seeking: self.seeking,
             audio_track_id: self.audio.clone(),
             subtitle_track_id: self.subtitle.clone(),
             volume: self.volume,
@@ -445,6 +457,12 @@ impl PlayerModel {
                 if buffered != self.buffered {
                     self.buffered = buffered;
                     self.buffered_pending = true;
+                }
+            }
+            Change::Seeking(seeking) => {
+                if seeking != self.seeking {
+                    self.seeking = seeking;
+                    events.push(PlayerEvent::SeekingChange { seeking });
                 }
             }
             Change::ChapterList(json) => {
@@ -1003,6 +1021,26 @@ mod tests {
         assert_eq!(ranges(&events), Some(vec![]));
         assert!(model.snapshot().buffered.is_empty());
         assert_eq!(ranges(&model.apply(Change::StartFile, at(3300))), None);
+    }
+
+    #[test]
+    fn seeking_is_reported_when_it_changes() {
+        let mut model = PlayerModel::default();
+        assert!(!model.snapshot().seeking);
+        assert_eq!(
+            model.apply(Change::Seeking(true), at(0)),
+            [PlayerEvent::SeekingChange { seeking: true }]
+        );
+        assert!(model.snapshot().seeking);
+        assert_eq!(model.apply(Change::Seeking(true), at(10)), []);
+        assert_eq!(
+            model.apply(Change::Seeking(false), at(20)),
+            [PlayerEvent::SeekingChange { seeking: false }]
+        );
+        assert_eq!(
+            serde_json::to_value(PlayerEvent::SeekingChange { seeking: true }).unwrap(),
+            serde_json::json!({ "event": "seekingChange", "payload": { "seeking": true } })
+        );
     }
 
     #[test]

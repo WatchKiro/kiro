@@ -11,6 +11,7 @@ import {
   NEAREST_CELLS,
   PREFETCH_DELAY_MS,
   PreviewCache,
+  PreviewCaches,
   PreviewScheduler,
   STORYBOARD_FRAMES,
   WARM_INTERVAL_MS,
@@ -183,6 +184,22 @@ describe('PreviewCache', () => {
     const hovered = new PreviewCache();
     for (let index = 0; index < MAX_PREFETCHES; index++) hovered.record(index, frame(index * 5), 0);
     assert.equal(hovered.wantsBackground(100, 0, 'prefetch'), true);
+  });
+});
+
+describe('PreviewCaches', () => {
+  it('keeps the last few streams, the one used longest ago going first', () => {
+    const caches = new PreviewCaches(2);
+    const a = caches.get('a');
+    a.record(1, frame(5), 0);
+    assert.equal(caches.get('a'), a, 'the same again');
+    const b = caches.get('b');
+    assert.notEqual(b, a);
+    caches.get('a');
+    caches.get('c');
+    assert.equal(caches.size, 2);
+    assert.equal(caches.get('a'), a, 'used since b: kept');
+    assert.notEqual(caches.get('b'), b, 'gone');
   });
 });
 
@@ -473,25 +490,36 @@ describe('PreviewScheduler', () => {
     }
   });
 
-  it('warms the core at most once in a while, and not for a stream that cannot be previewed', () => {
+  it('warms the core at most once in a while, and not for a stream that cannot be previewed', async () => {
     let now = 0;
+    let answers = 0;
     const cache = new PreviewCache();
     const { calls, request } = fakeRequest();
     const scheduler = new PreviewScheduler(
       cache,
       request,
-      () => undefined,
+      () => answers++,
       () => now,
     );
+    // Opened where the first background cell is; its frame comes with it.
+    scheduler.background([{ index: 122, position: 1837.5, kind: 'prefetch' }]);
     scheduler.warm();
     scheduler.warm();
     assert.deepEqual(
-      calls.map((call) => call.kind),
-      ['warm'],
+      calls.map((call) => [call.kind, call.position]),
+      [['warm', 1837.5]],
     );
+    calls[0]?.resolve(frame(1836));
+    await settle();
+    assert.deepEqual(cache.get(122), { image: IMAGE, position: 1836 });
+    assert.equal(answers, 1);
     now = WARM_INTERVAL_MS;
     scheduler.warm();
     assert.equal(calls.length, 2);
+    assert.equal(calls[1]?.position, 0, 'nothing left to seed: the start');
+    calls[1]?.resolve({ status: 'warming' });
+    await settle();
+    assert.equal(answers, 1, 'nothing to show');
     cache.record(1, { status: 'unavailable' }, now);
     now += WARM_INTERVAL_MS;
     scheduler.warm();

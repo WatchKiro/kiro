@@ -14,6 +14,12 @@
 //! worth, which varies by stream far more than within one), and the next
 //! seek asks for the median of that at once, up to [`MAX_FIRST_READ`].
 //!
+//! Opening a stream reads its header and index (1 MB for a 1080p web
+//! release, 4 to 6 MB for a 4K remux): what the reader downloads before the
+//! core reports the stream open is kept ([`OpeningCache`], up to
+//! [`MAX_OPENING_CACHE`]) and served from memory when the same stream is
+//! opened again after the core was freed for being idle.
+//!
 //! mpv calls the callbacks on its own threads, and `read` may block: requests
 //! run on Tauri's async runtime with `block_on`, bounded by
 //! [`REQUEST_TIMEOUT`]. A host that ignores ranges can't be previewed at all
@@ -46,6 +52,50 @@ pub const MAX_FIRST_READ: u64 = 1024 * 1024;
 const LEARNED_BURSTS: usize = 8;
 /// First reads are rounded up to this.
 const READ_GRANULARITY: u64 = 64 * 1024;
+/// The most of a stream's opening kept for opening it again.
+pub const MAX_OPENING_CACHE: u64 = 8 * 1024 * 1024;
+
+/// The ranges read while a stream was opened, to serve its next opening
+/// from memory. One stream at a time: another replaces it.
+#[derive(Default)]
+pub struct OpeningCache {
+    url: Option<Url>,
+    /// By start offset, each range as the host sent it.
+    ranges: Vec<(u64, Vec<u8>)>,
+    size: u64,
+}
+
+impl OpeningCache {
+    /// The range kept that holds `offset` of `url`, if any.
+    fn get(&self, url: &Url, offset: u64) -> Option<(u64, Vec<u8>)> {
+        if self.url.as_ref() != Some(url) {
+            return None;
+        }
+        self.ranges
+            .iter()
+            .find(|(start, body)| (*start..*start + body.len() as u64).contains(&offset))
+            .cloned()
+    }
+
+    /// Keeps `body` read from `offset` of `url`, while there is room.
+    fn put(&mut self, url: &Url, offset: u64, body: &[u8]) {
+        if self.url.as_ref() != Some(url) {
+            self.url = Some(url.clone());
+            self.ranges.clear();
+            self.size = 0;
+        }
+        if body.is_empty() || self.size + body.len() as u64 > MAX_OPENING_CACHE {
+            return;
+        }
+        self.size += body.len() as u64;
+        self.ranges.push((offset, body.to_vec()));
+    }
+
+    /// Bytes kept.
+    pub fn bytes(&self) -> u64 {
+        self.size
+    }
+}
 /// One range request, connecting included. mpv waits for `read` to return
 /// (also when the preview core is freed), so this bounds that wait.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -70,10 +120,14 @@ pub struct ReaderContext {
     refused: AtomicBool,
     /// What the last few previews downloaded before their frame was there.
     bursts: Mutex<VecDeque<u64>>,
+    /// The stream's opening, kept across cores for opening it again.
+    opening: Arc<Mutex<OpeningCache>>,
+    /// Still opening: what is read goes into `opening`.
+    recording: AtomicBool,
 }
 
 impl ReaderContext {
-    pub fn new() -> Result<Arc<Self>, reqwest::Error> {
+    pub fn new(opening: Arc<Mutex<OpeningCache>>) -> Result<Arc<Self>, reqwest::Error> {
         // reqwest is built without a crypto provider; use `ring`, like the
         // addon transport. Fails harmlessly if one is installed already.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -98,7 +152,14 @@ impl ReaderContext {
             taken: AtomicU64::new(0),
             refused: AtomicBool::new(false),
             bursts: Mutex::new(VecDeque::new()),
+            opening,
+            recording: AtomicBool::new(true),
         }))
+    }
+
+    /// The stream is open: what is read from now on is previews, not kept.
+    pub fn opened(&self) {
+        self.recording.store(false, Ordering::Relaxed);
     }
 
     /// mpv took `bytes` between a preview's seek and its frame: the next
@@ -216,6 +277,19 @@ impl Reader {
             return Ok(());
         }
         let (start, end) = (self.offset, self.offset + len - 1);
+        // Read while this stream was opened before: served from memory.
+        let kept = self
+            .context()
+            .opening
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&self.url, start);
+        if let Some((kept_start, body)) = kept {
+            self.buffer = body;
+            self.buffer_start = kept_start;
+            self.last_len = len;
+            return Ok(());
+        }
         let client = self.context().client.clone();
         let url = self.url.clone();
         let cancelled = &self.cancelled;
@@ -253,9 +327,17 @@ impl Reader {
             self.context().refused.store(true, Ordering::Relaxed);
         }
         let (body, total) = result?;
-        self.context()
+        let context = self.context();
+        context
             .bytes
             .fetch_add(body.len() as u64, Ordering::Relaxed);
+        if context.recording.load(Ordering::Relaxed) {
+            context
+                .opening
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .put(&self.url, start, &body);
+        }
         self.size = total.or(self.size);
         self.buffer = body;
         self.buffer_start = start;
@@ -427,7 +509,7 @@ mod tests {
 
     #[test]
     fn asks_for_more_while_reading_on_and_starts_small_after_a_seek() {
-        let context = ReaderContext::new().unwrap();
+        let context = ReaderContext::new(Arc::default()).unwrap();
         let mut reader = reader(&context);
         assert_eq!(reader.next_len(), FIRST_READ);
         // Read straight on from a first range: twice as much, up to the cap.
@@ -447,7 +529,7 @@ mod tests {
 
     #[test]
     fn learns_how_much_a_preview_downloads() {
-        let context = ReaderContext::new().unwrap();
+        let context = ReaderContext::new(Arc::default()).unwrap();
         let reader = reader(&context);
         assert_eq!(context.first_read(), FIRST_READ);
         // 4K keyframes: about 600 KB each, one of them huge.
@@ -458,10 +540,10 @@ mod tests {
         assert_eq!(context.first_read(), 704 * 1024);
         assert_eq!(reader.next_len(), 704 * 1024, "after a seek");
         // Small keyframes never go below the first read; huge ones are capped.
-        let small = ReaderContext::new().unwrap();
+        let small = ReaderContext::new(Arc::default()).unwrap();
         small.learn(100 * 1024);
         assert_eq!(small.first_read(), FIRST_READ);
-        let huge = ReaderContext::new().unwrap();
+        let huge = ReaderContext::new(Arc::default()).unwrap();
         huge.learn(3 * 1024 * 1024);
         assert_eq!(huge.first_read(), MAX_FIRST_READ);
         // Only the last few count, so a stream that changes is followed.
@@ -472,8 +554,28 @@ mod tests {
     }
 
     #[test]
+    fn keeps_what_opening_reads_and_serves_it_next_time() {
+        let url = Url::parse("http://127.0.0.1/a.mkv").unwrap();
+        let mut cache = OpeningCache::default();
+        assert!(cache.get(&url, 0).is_none());
+        cache.put(&url, 0, &[1, 2, 3, 4]);
+        cache.put(&url, 1000, &[5, 6]);
+        assert_eq!(cache.get(&url, 2), Some((0, vec![1, 2, 3, 4])));
+        assert_eq!(cache.get(&url, 1001), Some((1000, vec![5, 6])));
+        assert!(cache.get(&url, 4).is_none(), "just past a range");
+        assert_eq!(cache.bytes(), 6);
+        // Another stream replaces it; too much is left out.
+        let other = Url::parse("http://127.0.0.1/b.mkv").unwrap();
+        cache.put(&other, 0, &[9]);
+        assert!(cache.get(&url, 0).is_none());
+        assert_eq!(cache.bytes(), 1);
+        cache.put(&other, 1, &vec![0; MAX_OPENING_CACHE as usize]);
+        assert_eq!(cache.bytes(), 1);
+    }
+
+    #[test]
     fn serves_reads_from_the_last_range() {
-        let context = ReaderContext::new().unwrap();
+        let context = ReaderContext::new(Arc::default()).unwrap();
         let mut reader = reader(&context);
         reader.buffer = (0..=255u8).collect();
         reader.buffer_start = 1000;
