@@ -110,12 +110,9 @@ fn run(mpv: &Mpv, shared: &Shared, stats: &RenderStats, stop: &AtomicBool) {
         if log && last_stats_log.elapsed() >= STATS_LOG_INTERVAL {
             last_stats_log = Instant::now();
             let state = shared.model().state();
-            let kb = |name: &str| mpv.get_property::<i64>(name).unwrap_or(0) / 1024;
             player_log!(
-                "[kiro-player] {state:?} cache {} KB ahead / {} KB held, {} KB/s in; {:?}",
-                kb("demuxer-cache-state/fw-bytes"),
-                kb("demuxer-cache-state/total-bytes"),
-                kb("cache-speed"),
+                "[kiro-player] {state:?} {} KB/s in; {:?}",
+                mpv.get_property::<i64>("cache-speed").unwrap_or(0) / 1024,
                 debug_stats(mpv, stats)
             );
         }

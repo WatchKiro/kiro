@@ -208,7 +208,8 @@ struct Worker {
     failures: u32,
     /// Where frames are written by mpv and read back.
     dir: Option<PathBuf>,
-    /// The stream's opening bytes, kept across cores (`preview_reader.rs`).
+    /// Streams' opening bytes, kept across cores and players
+    /// (`preview_reader.rs`).
     opening: Arc<Mutex<OpeningCache>>,
 }
 
@@ -220,7 +221,7 @@ impl Worker {
             failed: None,
             failures: 0,
             dir: None,
-            opening: Arc::default(),
+            opening: OpeningCache::shared(),
         }
     }
 
@@ -455,14 +456,16 @@ impl Worker {
         if let Some(reader) = &reader {
             reader.opened();
             if debug_log_enabled() {
-                player_log!(
-                    "[kiro-preview] opening read {} KB ({} KB kept for next time)",
-                    reader.bytes_read() / 1024,
+                let kept = url::Url::parse(source).map_or(0, |url| {
                     self.opening
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
-                        .bytes()
-                        / 1024
+                        .bytes(&url)
+                });
+                player_log!(
+                    "[kiro-preview] opening read {} KB ({} KB kept for next time)",
+                    reader.bytes_read() / 1024,
+                    kept / 1024
                 );
             }
         }
@@ -923,6 +926,35 @@ mod tests {
         serve_with(body, true)
     }
 
+    /// An addon's link that redirects every request to `target` (as debrid
+    /// links through an addon do). Returns the URL and how many requests
+    /// reached it.
+    fn redirect_to(target: String) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                counter.fetch_add(1, Ordering::Relaxed);
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    line.clear();
+                }
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (format!("http://127.0.0.1:{port}/key123/seekable.mkv"), hits)
+    }
+
     fn frame(outcome: Outcome) -> Frame {
         match outcome {
             Outcome::Frame(frame) => frame,
@@ -1017,6 +1049,23 @@ mod tests {
     }
 
     #[test]
+    fn a_redirecting_link_is_followed_once() {
+        let (cdn, _) = serve(FIXTURE);
+        let (url, hits) = redirect_to(cdn);
+        let previewer = Previewer::new().unwrap();
+        previewer.set_source(Some(url));
+        let first = frame(previewer.request(5.0));
+        assert!((first.position - 4.0).abs() < 0.2);
+        let after_open = hits.load(Ordering::Relaxed);
+        assert!(after_open >= 1, "the first request found where the file is");
+        // Every range from then on goes to the file's host directly.
+        for position in [1.0, 9.5, 6.0] {
+            frame(previewer.request(position));
+        }
+        assert_eq!(hits.load(Ordering::Relaxed), after_open);
+    }
+
+    #[test]
     fn opening_again_reads_nothing_until_the_first_seek() {
         let (url, sent) = serve(FIXTURE);
         let shared = Arc::new(Shared {
@@ -1025,6 +1074,8 @@ mod tests {
             stop: AtomicBool::new(false),
         });
         let mut worker = Worker::new(shared);
+        // A cache of this test's own: the shared one is every test's.
+        worker.opening = Arc::default();
         let core = worker.open(&url, None).unwrap();
         let opened = sent.load(Ordering::Relaxed);
         assert!(opened > 0);

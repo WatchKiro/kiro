@@ -1168,6 +1168,8 @@ function Controls({
   );
 }
 
+/** A seek still going after this long shows its frame: sooner would flash on seeks served from the buffer. */
+const SEEK_OVERLAY_DELAY_MS = 120;
 /** A seek that hasn't landed by then shows its frame no longer: something is wrong. */
 const SEEK_OVERLAY_MAX_MS = 3000;
 
@@ -1183,13 +1185,18 @@ function SeekOverlay({
   frame: PreviewFrame | undefined;
   target: number | null;
 }) {
-  const [expired, setExpired] = useState<number | null>(null);
+  // Shown for `target` between the delay and the limit.
+  const [shown, setShown] = useState<number | null>(null);
   useEffect(() => {
     if (target === null) return;
-    const timer = window.setTimeout(() => setExpired(target), SEEK_OVERLAY_MAX_MS);
-    return () => window.clearTimeout(timer);
+    const show = window.setTimeout(() => setShown(target), SEEK_OVERLAY_DELAY_MS);
+    const hide = window.setTimeout(() => setShown(null), SEEK_OVERLAY_MAX_MS);
+    return () => {
+      window.clearTimeout(show);
+      window.clearTimeout(hide);
+    };
   }, [target]);
-  if (!frame || target === null || expired === target) return null;
+  if (!frame || target === null || shown !== target) return null;
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden bg-black">
       <img

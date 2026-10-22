@@ -737,24 +737,14 @@ impl PlaybackBackend for MpvPlayer {
                 .buffered
                 .iter()
                 .any(|range| (range.start..=range.end).contains(&seconds));
-            let fw = self
-                .mpv
-                .get_property::<i64>("demuxer-cache-state/fw-bytes")
-                .unwrap_or(0);
-            let total = self
-                .mpv
-                .get_property::<i64>("demuxer-cache-state/total-bytes")
-                .unwrap_or(0);
             player_log!(
-                "[kiro-player] seek {seconds:.1}s from {:.1}s: {} (cache {} KB ahead, {} KB held)",
+                "[kiro-player] seek {seconds:.1}s from {:.1}s: {}",
                 snapshot.position,
                 if held {
                     "in the buffer"
                 } else {
                     "reads the stream"
                 },
-                fw / 1024,
-                total / 1024,
             );
         }
         self.mpv

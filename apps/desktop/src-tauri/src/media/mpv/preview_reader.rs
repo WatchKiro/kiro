@@ -47,54 +47,88 @@ pub const PROTOCOL: &str = "kiro-preview";
 pub const FIRST_READ: u64 = 256 * 1024;
 /// The most asked for at once, however long mpv reads straight on.
 pub const MAX_READ: u64 = 512 * 1024;
-/// The most a learned first read grows to: a 4K keyframe or two.
-pub const MAX_FIRST_READ: u64 = 1024 * 1024;
+/// The most a learned first read grows to: a remux keyframe, with room.
+pub const MAX_FIRST_READ: u64 = 2 * 1024 * 1024;
 /// Seeks whose reads are remembered, for the median.
 const LEARNED_BURSTS: usize = 8;
 /// First reads are rounded up to this.
 const READ_GRANULARITY: u64 = 64 * 1024;
-/// The most of a stream's opening kept for opening it again.
+/// The most of one stream's opening kept for opening it again.
 pub const MAX_OPENING_CACHE: u64 = 8 * 1024 * 1024;
+/// Streams whose openings are kept (the one playing, and a couple to come
+/// back to).
+pub const KEPT_OPENINGS: usize = 3;
 
 /// The ranges read while a stream was opened, to serve its next opening
-/// from memory. One stream at a time: another replaces it.
+/// from memory: for the last few streams, the one used longest ago going
+/// first. Shared by every preview core in the process, so it outlives the
+/// player (leaving an episode and coming back opens it from memory too).
 #[derive(Default)]
 pub struct OpeningCache {
-    url: Option<Url>,
+    streams: Vec<KeptOpening>,
+}
+
+struct KeptOpening {
+    url: Url,
     /// By start offset, each range as the host sent it.
     ranges: Vec<(u64, Vec<u8>)>,
     size: u64,
 }
 
 impl OpeningCache {
+    /// The cache every preview core shares.
+    pub fn shared() -> Arc<Mutex<OpeningCache>> {
+        static SHARED: std::sync::LazyLock<Arc<Mutex<OpeningCache>>> =
+            std::sync::LazyLock::new(Arc::default);
+        SHARED.clone()
+    }
+
     /// The range kept that holds `offset` of `url`, if any.
-    fn get(&self, url: &Url, offset: u64) -> Option<(u64, Vec<u8>)> {
-        if self.url.as_ref() != Some(url) {
-            return None;
-        }
-        self.ranges
+    fn get(&mut self, url: &Url, offset: u64) -> Option<(u64, Vec<u8>)> {
+        let index = self.streams.iter().position(|kept| kept.url == *url)?;
+        let found = self.streams[index]
+            .ranges
             .iter()
             .find(|(start, body)| (*start..*start + body.len() as u64).contains(&offset))
-            .cloned()
+            .cloned();
+        if found.is_some() && index + 1 != self.streams.len() {
+            // Used: last to go.
+            let kept = self.streams.remove(index);
+            self.streams.push(kept);
+        }
+        found
     }
 
     /// Keeps `body` read from `offset` of `url`, while there is room.
     fn put(&mut self, url: &Url, offset: u64, body: &[u8]) {
-        if self.url.as_ref() != Some(url) {
-            self.url = Some(url.clone());
-            self.ranges.clear();
-            self.size = 0;
-        }
-        if body.is_empty() || self.size + body.len() as u64 > MAX_OPENING_CACHE {
+        let index = match self.streams.iter().position(|kept| kept.url == *url) {
+            Some(index) => index,
+            None => {
+                while self.streams.len() >= KEPT_OPENINGS {
+                    self.streams.remove(0);
+                }
+                self.streams.push(KeptOpening {
+                    url: url.clone(),
+                    ranges: Vec::new(),
+                    size: 0,
+                });
+                self.streams.len() - 1
+            }
+        };
+        let kept = &mut self.streams[index];
+        if body.is_empty() || kept.size + body.len() as u64 > MAX_OPENING_CACHE {
             return;
         }
-        self.size += body.len() as u64;
-        self.ranges.push((offset, body.to_vec()));
+        kept.size += body.len() as u64;
+        kept.ranges.push((offset, body.to_vec()));
     }
 
-    /// Bytes kept.
-    pub fn bytes(&self) -> u64 {
-        self.size
+    /// Bytes kept for `url`.
+    pub fn bytes(&self, url: &Url) -> u64 {
+        self.streams
+            .iter()
+            .find(|kept| kept.url == *url)
+            .map_or(0, |kept| kept.size)
     }
 }
 /// One range request, connecting included. mpv waits for `read` to return
@@ -228,6 +262,11 @@ enum ReadError {
 struct Reader {
     context: *const ReaderContext,
     url: Url,
+    /// Where `url` redirected to, if it did: asked directly from then on,
+    /// so a host that redirects each range (an addon's link to a CDN)
+    /// costs one round trip per range, not two. Dropped, to be found
+    /// again, when a request to it fails (a signed link that expired).
+    resolved: Option<Url>,
     /// Where mpv reads next.
     offset: u64,
     size: Option<u64>,
@@ -291,32 +330,77 @@ impl Reader {
             self.last_len = len;
             return Ok(());
         }
+        let mut result = self.request(
+            self.resolved.clone().unwrap_or_else(|| self.url.clone()),
+            start,
+            end,
+        );
+        if result.is_err() && result != Err(ReadError::Cancelled) && self.resolved.is_some() {
+            // The resolved link stopped working (expired): back to the
+            // original, which will redirect afresh.
+            if debug_log_enabled() {
+                player_log!("[kiro-reader] the resolved link failed: asking the original again");
+            }
+            self.resolved = None;
+            result = self.request(self.url.clone(), start, end);
+        }
+        if result == Err(ReadError::Refused) {
+            self.context().refused.store(true, Ordering::Relaxed);
+        }
+        let (body, total, served_by) = result?;
+        if served_by != self.url {
+            self.resolved = Some(served_by);
+        }
+        let context = self.context();
+        context
+            .bytes
+            .fetch_add(body.len() as u64, Ordering::Relaxed);
+        if context.recording.load(Ordering::Relaxed) {
+            context
+                .opening
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .put(&self.url, start, &body);
+        }
+        self.size = total.or(self.size);
+        self.buffer = body;
+        self.buffer_start = start;
+        self.last_len = len;
+        Ok(())
+    }
+
+    /// One range request to `url`: the body, the total size the host gave
+    /// and the URL that served it (after any redirect).
+    fn request(
+        &self,
+        url: Url,
+        start: u64,
+        end: u64,
+    ) -> Result<(Vec<u8>, Option<u64>, Url), ReadError> {
+        let len = end - start + 1;
         let client = self.context().client.clone();
-        let url = self.url.clone();
         let cancelled = &self.cancelled;
         let log = debug_log_enabled();
         let asked = Instant::now();
-        let result = tauri::async_runtime::block_on(async move {
+        tauri::async_runtime::block_on(async move {
             let mut response = client
                 .get(url.clone())
                 .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
                 .send()
                 .await
                 .map_err(|_| ReadError::Network)?;
+            let served_by = response.url().clone();
             if log {
                 // Where the range came from, and how long the first byte took:
                 // a host that redirects each range costs a round trip more.
-                let redirected = response.url().host_str() != url.host_str();
+                let redirected = served_by.host_str() != url.host_str();
                 player_log!(
                     "[kiro-reader] bytes {start}-{end} ({} KB): {} after {:?}{}",
                     len / 1024,
                     response.status().as_u16(),
                     asked.elapsed(),
                     if redirected {
-                        format!(
-                            ", redirected to {}",
-                            response.url().host_str().unwrap_or("-")
-                        )
+                        format!(", redirected to {}", served_by.host_str().unwrap_or("-"))
                     } else {
                         String::new()
                     }
@@ -343,35 +427,15 @@ impl Reader {
                     break;
                 }
             }
-            Ok((body, total))
-        });
-        if result == Err(ReadError::Refused) {
-            self.context().refused.store(true, Ordering::Relaxed);
-        }
-        let (body, total) = result?;
-        if log {
-            player_log!(
-                "[kiro-reader] bytes {start}-{end}: {} KB in {:?}",
-                body.len() / 1024,
-                asked.elapsed()
-            );
-        }
-        let context = self.context();
-        context
-            .bytes
-            .fetch_add(body.len() as u64, Ordering::Relaxed);
-        if context.recording.load(Ordering::Relaxed) {
-            context
-                .opening
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .put(&self.url, start, &body);
-        }
-        self.size = total.or(self.size);
-        self.buffer = body;
-        self.buffer_start = start;
-        self.last_len = len;
-        Ok(())
+            if log {
+                player_log!(
+                    "[kiro-reader] bytes {start}-{end}: {} KB in {:?}",
+                    body.len() / 1024,
+                    asked.elapsed()
+                );
+            }
+            Ok((body, total, served_by))
+        })
     }
 
     fn read(&mut self, out: &mut [u8]) -> Result<usize, ReadError> {
@@ -425,6 +489,7 @@ unsafe extern "C" fn open(
     let mut reader = Box::new(Reader {
         context: user_data.cast_const().cast(),
         url,
+        resolved: None,
         offset: 0,
         size: None,
         buffer: Vec::new(),
@@ -527,6 +592,7 @@ mod tests {
         Reader {
             context: Arc::as_ptr(context),
             url: Url::parse("http://127.0.0.1/a.mkv").unwrap(),
+            resolved: None,
             offset: 0,
             size: Some(100 * MAX_READ),
             buffer: Vec::new(),
@@ -592,14 +658,20 @@ mod tests {
         assert_eq!(cache.get(&url, 2), Some((0, vec![1, 2, 3, 4])));
         assert_eq!(cache.get(&url, 1001), Some((1000, vec![5, 6])));
         assert!(cache.get(&url, 4).is_none(), "just past a range");
-        assert_eq!(cache.bytes(), 6);
-        // Another stream replaces it; too much is left out.
-        let other = Url::parse("http://127.0.0.1/b.mkv").unwrap();
-        cache.put(&other, 0, &[9]);
-        assert!(cache.get(&url, 0).is_none());
-        assert_eq!(cache.bytes(), 1);
-        cache.put(&other, 1, &vec![0; MAX_OPENING_CACHE as usize]);
-        assert_eq!(cache.bytes(), 1);
+        assert_eq!(cache.bytes(&url), 6);
+        // Too much is left out.
+        cache.put(&url, 1, &vec![0; MAX_OPENING_CACHE as usize]);
+        assert_eq!(cache.bytes(&url), 6);
+        // The last few streams are kept, the one used longest ago going first.
+        let stream = |name: &str| Url::parse(&format!("http://127.0.0.1/{name}.mkv")).unwrap();
+        for name in ["b", "c"] {
+            cache.put(&stream(name), 0, &[9]);
+        }
+        assert!(cache.get(&url, 0).is_some(), "a used: last to go");
+        cache.put(&stream("d"), 0, &[9]);
+        assert!(cache.get(&stream("b"), 0).is_none(), "b went");
+        assert!(cache.get(&url, 0).is_some());
+        assert_eq!(cache.streams.len(), KEPT_OPENINGS);
     }
 
     #[test]
