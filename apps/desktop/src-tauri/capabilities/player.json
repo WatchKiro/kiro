@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "player",
-  "description": "The player page: native libmpv controls for the main window (those commands exist only with the libmpv feature), looking up an episode's intro and credits times on SkipDB (refused unless turned on in Settings), and putting the window in and out of fullscreen. player_set_now_playing passes the title, episode and poster to Discord Rich Presence, which sends nothing unless turned on in Settings. Only those two window APIs are granted, not core:default or the rest of core:window.",
+  "description": "The player page: native libmpv controls for the main window (those commands exist only with the libmpv feature), seek-bar previews (a second mpv reading the same stream, refused unless turned on in Settings), looking up an episode's intro and credits times on SkipDB (refused unless turned on in Settings), and putting the window in and out of fullscreen. player_set_now_playing passes the title, episode and poster to Discord Rich Presence, which sends nothing unless turned on in Settings. Only those two window APIs are granted, not core:default or the rest of core:window.",
   "windows": ["main"],
   "permissions": [
     "allow-player-attach",
@@ -21,6 +21,7 @@
     "allow-player-set-audio-delay",
     "allow-player-set-speed",
     "allow-player-stats",
+    "allow-player-preview",
     "allow-skip-times-lookup",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen"

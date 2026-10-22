@@ -8,6 +8,10 @@
  * is on. Like mpv, it keeps the delays and speed from one stream to the next.
  * Stream URLs with `dead` in them fail to open, as a dead link does, and
  * those with `drops` fail a few seconds after they start.
+ *
+ * Seek-bar previews are drawn frames labelled with the keyframe's time (a
+ * keyframe every 4 s). `localStorage['kiro.preview.previews']`: `busy` (the
+ * player is short of buffered video), `unavailable`, or `slow`.
  */
 import type { Chapter, MediaTrack, PlaybackState } from '@kiro/player-core';
 
@@ -326,4 +330,39 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
     return track;
   },
   player_stats: () => STATS,
+  player_preview: async ({ position }) => {
+    let mode: string | null = null;
+    try {
+      mode = localStorage.getItem('kiro.preview.previews');
+    } catch {
+      // No storage: the default.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, mode === 'slow' ? 1500 : 180));
+    if (mode === 'busy') return { status: 'busy' };
+    if (mode === 'unavailable' || duration === null) return { status: 'unavailable' };
+    const keyframe = Math.floor(Math.min(Number(position), duration) / 4) * 4;
+    return { status: 'frame', position: keyframe, image: previewFrame(keyframe) };
+  },
 };
+
+/** A 320×180 JPEG standing in for a frame of the video at `seconds`. */
+function previewFrame(seconds: number): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = 320;
+  canvas.height = 180;
+  const context = canvas.getContext('2d');
+  if (!context) return '';
+  const hue = (seconds / DURATION) * 300;
+  const gradient = context.createLinearGradient(0, 0, 320, 180);
+  gradient.addColorStop(0, `hsl(${hue} 55% 35%)`);
+  gradient.addColorStop(1, `hsl(${hue + 40} 60% 12%)`);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 320, 180);
+  context.fillStyle = 'rgb(255 255 255 / 0.9)';
+  context.font = '600 34px ui-monospace, monospace';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  const minutes = Math.floor(seconds / 60);
+  context.fillText(`${minutes}:${String(seconds % 60).padStart(2, '0')}`, 160, 90);
+  return canvas.toDataURL('image/jpeg', 0.75);
+}

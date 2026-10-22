@@ -38,6 +38,7 @@ export const DEFAULT_PLAYBACK_SETTINGS: PlaybackSettings = {
   volume: 100,
   markWatchedPercent: 90,
   keepScreenOn: true,
+  seekPreviews: true,
   audioPassthrough: false,
   passthroughFormats: ['ac3', 'dts'],
 };
@@ -351,6 +352,7 @@ function parsePlaybackSettings(value: unknown): PlaybackSettings {
       whole(playback.markWatchedPercent, WATCHED_PERCENT.min, WATCHED_PERCENT.max) ??
       defaults.markWatchedPercent,
     keepScreenOn: flag(playback.keepScreenOn, defaults.keepScreenOn),
+    seekPreviews: flag(playback.seekPreviews, defaults.seekPreviews),
     audioPassthrough: flag(playback.audioPassthrough, defaults.audioPassthrough),
     passthroughFormats: Array.isArray(playback.passthroughFormats)
       ? normalizePassthroughFormats(playback.passthroughFormats)

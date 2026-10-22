@@ -155,6 +155,11 @@ pub struct PlaybackSettings {
     /// Keep the display awake (no screensaver or display sleep) while a
     /// video plays.
     pub keep_screen_on: bool,
+    /// Show a frame from the video when hovering over the seek bar. Each one
+    /// downloads a little of the stream (0.3 to 1 MB), only on demand, and
+    /// none while the player is short of buffered video
+    /// (`media::mpv::preview`).
+    pub seek_previews: bool,
     /// Send [`Self::passthrough_formats`] to an AV receiver untouched
     /// (`crate::media::passthrough`) instead of decoding them.
     pub audio_passthrough: bool,
@@ -179,6 +184,7 @@ impl Default for PlaybackSettings {
             volume: 100,
             mark_watched_percent: 90,
             keep_screen_on: true,
+            seek_previews: true,
             audio_passthrough: false,
             passthrough_formats: PassthroughFormat::DEFAULTS.to_vec(),
         }
@@ -518,6 +524,7 @@ impl PlaybackSettings {
                 .filter(|percent| WATCHED_PERCENT.contains(percent))
                 .unwrap_or(defaults.mark_watched_percent),
             keep_screen_on: flag("keepScreenOn", defaults.keep_screen_on),
+            seek_previews: flag("seekPreviews", defaults.seek_previews),
             audio_passthrough: flag("audioPassthrough", defaults.audio_passthrough),
             passthrough_formats: value
                 .get("passthroughFormats")
@@ -751,6 +758,7 @@ mod tests {
                 skip_intros: true,
                 online_skip_times: true,
                 keep_screen_on: false,
+                seek_previews: false,
                 audio_passthrough: true,
                 passthrough_formats: vec![PassthroughFormat::Dts],
             },
@@ -1209,6 +1217,7 @@ mod tests {
                     "volume": 400,
                     "markWatchedPercent": 50,
                     "keepScreenOn": "no",
+                    "seekPreviews": 0,
                 },
                 "general": { "discordPresence": "yes", "discordShowTitle": false },
                 "subtitles": { "size": 150, "color": "yellow", "edge": "glow", "offset": 99 },

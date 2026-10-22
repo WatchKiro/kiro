@@ -138,6 +138,25 @@ export interface PlayerBridge {
   stats(): Promise<PlayerStats>;
 }
 
+/**
+ * A seek-bar preview (`commands::player::player_preview`), or why there
+ * isn't one. Mirrors `media::mpv::PreviewResult`.
+ */
+export type PlayerPreview =
+  /** `image`: a JPEG `data:` URL; `position`: the keyframe shown, at or before the one asked for. */
+  | { status: 'frame'; position: number; image: string }
+  /** Not now: the player is short of buffered video. */
+  | { status: 'busy' }
+  /** A newer request replaced this one. */
+  | { status: 'superseded' }
+  /** Nothing to preview for this stream (or the setting is off). */
+  | { status: 'unavailable' };
+
+/** A frame at `position` seconds for the seek bar. Resolves to `unknown`: check it with `parsePlayerPreview`. */
+export function previewCommand(position: number): Promise<unknown> {
+  return invoke<unknown>('player_preview', { position });
+}
+
 export const tauriPlayerBridge: PlayerBridge = {
   attach: (onEvent) => {
     const channel = new Channel<NativePlayerEvent>();

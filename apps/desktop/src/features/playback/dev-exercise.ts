@@ -1,4 +1,11 @@
 /**
+ * `VITE_KIRO_SPIKE_EXERCISE=previews` checks seek-bar previews on a network
+ * stream at least two minutes long: one asked for as playback starts (refused
+ * while little is buffered), three once the player has buffered, three at
+ * once (only the newest one to arrive is made; the others are superseded), then it leaves the player, which frees
+ * the preview core. Results are in the Rust log (`player_preview`,
+ * `[kiro-preview]`).
+ *
  * Development-only scripted run of the native player, for checking it end to
  * end without clicking: with `VITE_KIRO_SPIKE_EXERCISE=1` (plus
  * `VITE_KIRO_SPIKE_AUTOPLAY=<url>`, and `KIRO_SPIKE_LOG=1` so Rust logs every
@@ -65,6 +72,7 @@ import type { NativePlayer } from '@/features/playback/native-player';
 import { PASSTHROUGH_FORMATS, isPassthroughAvailable } from '@/features/settings/settings-data';
 import { settingsStore } from '@/features/settings/settings-store';
 import { getAppInfo, type GeneralSettings } from '@/services/native';
+import { previewCommand } from '@/services/player';
 
 const MODE = import.meta.env.DEV
   ? (import.meta.env.VITE_KIRO_SPIKE_EXERCISE as string | undefined)
@@ -140,6 +148,7 @@ export async function runDevExercise(
   if (MODE === 'smoke') return pauseOncePlaying(player);
   if (MODE === 'streams') return exerciseStreams(player, navigate);
   if (MODE === 'timing') return exerciseTiming(player, navigate);
+  if (MODE === 'previews') return exercisePreviews(player, navigate);
   if (MODE === 'passthrough') return exercisePassthrough(player, navigate);
   if (MODE === 'awake') {
     const keepScreenOn = (on: boolean) =>
@@ -345,6 +354,18 @@ async function exerciseSources(player: NativePlayer, navigate: (to: string) => u
   await step(() => player.load({ kind: 'network', url: TEST5_MKV, startPosition: 40 }));
   await wait('ended', 60_000);
   await step(() => player.seek(30));
+  await sleep(2000);
+  void navigate('/');
+}
+
+async function exercisePreviews(player: NativePlayer, navigate: (to: string) => unknown) {
+  await waitForState(player, 'playing');
+  await previewCommand(60).catch(() => undefined);
+  await sleep(15_000);
+  for (const position of [20, 60, 100]) await previewCommand(position).catch(() => undefined);
+  await Promise.all(
+    [30, 50, 70].map((position) => previewCommand(position).catch(() => undefined)),
+  );
   await sleep(2000);
   void navigate('/');
 }

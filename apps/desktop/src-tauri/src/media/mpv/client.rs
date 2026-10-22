@@ -325,6 +325,27 @@ impl Mpv {
         check(unsafe { ffi::mpv_request_log_messages(self.ctx.as_ptr(), level.as_ptr()) })
     }
 
+    /// Makes `protocol://...` URLs open through `open` (stream_cb.h), which
+    /// mpv calls on its own threads with `user_data`.
+    ///
+    /// # Safety
+    ///
+    /// `user_data` must stay valid, and `open` and the callbacks it installs
+    /// must keep stream_cb.h's contract, for as long as this core exists.
+    pub unsafe fn add_stream_protocol(
+        &self,
+        protocol: &str,
+        user_data: *mut c_void,
+        open: ffi::mpv_stream_cb_open_ro_fn,
+    ) -> Result<()> {
+        let protocol = cstring(protocol)?;
+        // SAFETY: the handle is live; mpv copies the name; the caller keeps
+        // `user_data` and `open` valid.
+        check(unsafe {
+            ffi::mpv_stream_cb_add_ro(self.ctx.as_ptr(), protocol.as_ptr(), user_data, open)
+        })
+    }
+
     /// Waits up to `timeout` seconds (negative: forever) for the next event.
     ///
     /// `None` on a timeout, a [`wakeup`](Self::wakeup), or a property that

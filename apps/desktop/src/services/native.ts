@@ -263,6 +263,12 @@ export interface PlaybackSettings {
   markWatchedPercent: number;
   /** Keep the display awake (no screensaver or display sleep) while a video plays. */
   keepScreenOn: boolean;
+  /**
+   * Show a frame of the video when hovering over the seek bar. Each one reads
+   * part of the stream, only on demand, and none while the player is short
+   * of buffered video.
+   */
+  seekPreviews: boolean;
   /** Send `passthroughFormats` to an AV receiver untouched instead of decoding them. */
   audioPassthrough: boolean;
   /** Distinct, each available on this platform, DTS-HD only with DTS. */

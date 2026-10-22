@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-preview"
+description = "Enables the player_preview command without any pre-configured scope."
+commands.allow = ["player_preview"]
+
+[[permission]]
+identifier = "deny-player-preview"
+description = "Denies the player_preview command without any pre-configured scope."
+commands.deny = ["player_preview"]

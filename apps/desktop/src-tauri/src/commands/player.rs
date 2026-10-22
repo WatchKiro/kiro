@@ -16,7 +16,7 @@ use tauri::{Runtime, State, WebviewWindow};
 use crate::core::error::{Error, Result};
 use crate::core::state::AppState;
 use crate::media::model::{MediaTrack, PlayerEvent, PlayerSnapshot};
-use crate::media::mpv::{DebugStats, EventSink, MpvPlayer, debug_log_enabled};
+use crate::media::mpv::{DebugStats, EventSink, MpvPlayer, PreviewResult, debug_log_enabled};
 use crate::media::{
     ExternalSubtitle, MediaSource, PlaybackBackend, PlaybackError, SubtitleStyle, audio_delay,
     parse_stream_url, parse_track_id, playback_speed, subtitle_delay,
@@ -466,6 +466,47 @@ pub fn player_set_speed(speed: f64, state: State<'_, PlayerState>) -> Result<()>
         Ok(())
     })();
     logged("player_set_speed", format_args!("{speed}"), result)
+}
+
+/// Settings → Playback → "Seek bar previews" (on if the settings can't be
+/// read).
+fn seek_previews(app: &AppState) -> bool {
+    app.settings()
+        .and_then(|settings| settings.get())
+        .map_or(true, |settings| settings.playback.seek_previews)
+}
+
+/// A frame of the stream at `position` seconds, for the seek bar
+/// (`media::mpv::preview`). `unavailable` while the setting is off. `async`:
+/// making a frame reads part of the stream.
+#[tauri::command]
+pub async fn player_preview(
+    position: f64,
+    state: State<'_, PlayerState>,
+    app: State<'_, AppState>,
+) -> Result<PreviewResult> {
+    if !position.is_finite() || position < 0.0 {
+        return Err(Error::invalid_argument(
+            "Preview position must be a non-negative number",
+        ));
+    }
+    if !seek_previews(&app) {
+        return Ok(PreviewResult::Unavailable);
+    }
+    let player = state.get()?;
+    let result = blocking(move || Ok(player.preview(position))).await;
+    if debug_log_enabled()
+        && let Ok(result) = &result
+    {
+        let status = match result {
+            PreviewResult::Frame { position, image } => {
+                format!("frame at {position:.1}s, {} chars", image.len())
+            }
+            other => format!("{other:?}"),
+        };
+        eprintln!("[kiro-player] player_preview({position:.1}) -> {status}");
+    }
+    result
 }
 
 /// Decoder and renderer details for the stats overlay. Not part of the event

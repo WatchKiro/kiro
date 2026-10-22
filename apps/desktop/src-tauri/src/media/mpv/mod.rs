@@ -31,6 +31,8 @@ mod ffi;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+pub mod preview;
+mod preview_reader;
 // The OpenGL render API (macOS, Linux); on Windows mpv draws into its own window.
 #[cfg(not(target_os = "windows"))]
 mod render;
@@ -62,6 +64,7 @@ use super::{ExternalSubtitle, MediaSource, PlaybackBackend, PlaybackError, Subti
 use crate::presence::{PlayerView, Presence};
 use client::Mpv;
 use ffi::error as mpv_error;
+use preview::{BufferState, Outcome, Previewer};
 
 /// Keeps the display awake while playing. mpv can't when it renders through
 /// the render API (`vo=libmpv`): its `stop-screensaver` needs its own window.
@@ -279,6 +282,24 @@ pub struct MpvPlayer {
     surface: surface::VideoSurface,
     stop_events: Arc<AtomicBool>,
     event_thread: Option<JoinHandle<()>>,
+    /// Seek-bar previews, from a second core opened on demand.
+    previewer: Previewer,
+}
+
+/// A seek-bar preview, or why there isn't one. Mirrors `PlayerPreview` in
+/// `apps/desktop/src/services/player.ts`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum PreviewResult {
+    /// `image` is a `data:image/jpeg;base64,…` URL; `position` is the
+    /// keyframe shown, at or before the position asked for.
+    Frame { position: f64, image: String },
+    /// Not now: the player is short of buffered video. Ask again later.
+    Busy,
+    /// A newer request replaced this one.
+    Superseded,
+    /// Nothing can be previewed for this stream.
+    Unavailable,
 }
 
 impl MpvPlayer {
@@ -355,6 +376,9 @@ impl MpvPlayer {
         )
         .map_err(|_| PlaybackError::Backend("Could not start the player".into()))?;
 
+        let previewer = Previewer::new()
+            .map_err(|_| PlaybackError::Backend("Could not start the player".into()))?;
+
         // From here on, dropping `player` tears everything down again.
         let mut player = Self {
             mpv: mpv.clone(),
@@ -363,6 +387,7 @@ impl MpvPlayer {
             surface: surface::VideoSurface::default(),
             stop_events,
             event_thread: Some(event_thread),
+            previewer,
         };
         player.surface = surface::VideoSurface::attach(prepared, window, mpv, stats)?;
         Ok(player)
@@ -449,6 +474,7 @@ impl MpvPlayer {
             .unwrap_or_else(PoisonError::into_inner) = None;
         // Silence audio straight away, even if a command still holds the player.
         let _ = self.mpv.command("stop", &[]);
+        self.previewer.set_source(None);
         let result = self.surface.detach(window);
         self.surface.release_renderer();
         result
@@ -457,13 +483,49 @@ impl MpvPlayer {
     /// Debug builds: load an mpv-specific target such as a lavfi test pattern.
     #[cfg(debug_assertions)]
     pub fn load_raw(&self, target: &str) -> Result<(), PlaybackError> {
+        // Test patterns can't be seeked: nothing to preview.
+        self.previewer.set_source(None);
         self.mpv
             .command("loadfile", &[target, "replace"])
             .map_err(backend_error)
     }
 
     pub fn stop(&self) -> Result<(), PlaybackError> {
+        self.previewer.set_source(None);
         self.mpv.command("stop", &[]).map_err(backend_error)
+    }
+
+    /// A seek-bar preview at `position` seconds of the stream that is
+    /// playing. Refused ([`PreviewResult::Busy`]) while that could hold up
+    /// playback ([`preview::could_stall_playback`]). Blocks while the frame
+    /// is made: call it off the async runtime.
+    pub fn preview(&self, position: f64) -> PreviewResult {
+        if preview::could_stall_playback(&self.buffer_state()) {
+            return PreviewResult::Busy;
+        }
+        match self.previewer.request(position) {
+            Outcome::Frame(frame) => {
+                use base64::Engine as _;
+                let data = base64::engine::general_purpose::STANDARD.encode(&frame.jpeg);
+                PreviewResult::Frame {
+                    position: frame.position,
+                    image: format!("data:image/jpeg;base64,{data}"),
+                }
+            }
+            Outcome::Superseded => PreviewResult::Superseded,
+            Outcome::Unavailable => PreviewResult::Unavailable,
+        }
+    }
+
+    fn buffer_state(&self) -> BufferState {
+        let (position, duration) = self.shared.model().timeline();
+        BufferState {
+            buffering: self.mpv.get_property("paused-for-cache").unwrap_or(false),
+            via_network: self.mpv.get_property("demuxer-via-network").unwrap_or(true),
+            cached_seconds: self.mpv.get_property("demuxer-cache-duration").ok(),
+            position,
+            duration,
+        }
     }
 
     pub fn has_track(&self, kind: TrackKind, id: &str) -> bool {
@@ -558,6 +620,7 @@ impl PlaybackBackend for MpvPlayer {
             args.extend(["-1", options]);
         }
         self.mpv.command("loadfile", &args).map_err(backend_error)?;
+        self.previewer.set_source(Some(target));
         self.mpv.set_property("pause", false).map_err(backend_error)
     }
 

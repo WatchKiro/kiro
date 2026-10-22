@@ -31,6 +31,7 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type PointerEvent,
   type ReactNode,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -54,6 +55,7 @@ import {
   type SkipSegment,
 } from '@/features/playback/chapter-skip';
 import { AutoSkippedNotice, SkipButton } from '@/features/playback/skip-button';
+import type { PreviewFrame } from '@/features/playback/seek-preview';
 import { fallbackNotice } from '@/features/playback/stream-fallback';
 import { StreamChoices, StreamsMenu } from '@/features/playback/stream-menu';
 import type { SubtitleSources, SubtitleSourcesState } from '@/features/playback/subtitle-sources';
@@ -70,6 +72,7 @@ import {
   type PlayerTiming,
   type TimingNotice,
 } from '@/features/playback/use-player-timing';
+import { useSeekPreview } from '@/features/playback/use-seek-preview';
 import { useSkipParts } from '@/features/playback/use-skip-parts';
 import { useStreamSwitching, type StreamSwitching } from '@/features/playback/use-stream-switching';
 import { useSubtitleSources } from '@/features/playback/use-subtitle-sources';
@@ -900,6 +903,15 @@ function Controls({
   );
   const seekBy = (delta: number) =>
     run(player.seek(clamp(view.position + delta, 0, view.duration ?? Infinity)));
+  /** A frame of the video above the seek bar while hovering (Settings → Playback). */
+  const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
+  const preview = useSeekPreview(seekPreviews, view.duration);
+  const trackHover = (event: PointerEvent<HTMLDivElement>) => {
+    if (!view.duration) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const fraction = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+    preview.setHover({ position: fraction * view.duration, pressed: event.buttons !== 0 });
+  };
   const level = view.muted ? 0 : view.volume;
   const VolumeIcon = level === 0 ? VolumeX : level < 0.5 ? Volume1 : Volume2;
 
@@ -915,7 +927,19 @@ function Controls({
         <span className="w-16 text-right font-mono text-xs text-ink-100 tabular-nums">
           {formatDuration(position)}
         </span>
-        <div className="relative flex-1">
+        <div
+          className="relative flex-1"
+          onPointerMove={trackHover}
+          onPointerDown={trackHover}
+          onPointerLeave={() => preview.setHover(null)}
+        >
+          {preview.hover && view.duration && (
+            <SeekPreviewCard
+              position={preview.hover.position}
+              duration={view.duration}
+              frame={preview.frame}
+            />
+          )}
           <Range
             label="Seek"
             seekBar
@@ -1018,6 +1042,42 @@ function Controls({
           </ControlButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Above the seek bar while the pointer is over it: the time under the
+ * pointer, with a frame from there once one has been made
+ * (`use-seek-preview.ts`). Kept inside the bar's ends.
+ */
+function SeekPreviewCard({
+  position,
+  duration,
+  frame,
+}: {
+  position: number;
+  duration: number;
+  frame: PreviewFrame | undefined;
+}) {
+  const percent = clamp((position / duration) * 100, 0, 100);
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute bottom-full z-20 mb-3 flex -translate-x-1/2 flex-col items-center gap-1.5"
+      style={{ left: `clamp(6rem, ${percent}%, calc(100% - 6rem))` }}
+    >
+      {frame && (
+        <img
+          src={frame.image}
+          alt=""
+          draggable={false}
+          className="w-48 rounded-lg bg-black shadow-[0_12px_40px_-12px_rgb(0_0_0/0.9)] ring-1 ring-white/15"
+        />
+      )}
+      <span className="rounded-md bg-black/75 px-2 py-0.5 font-mono text-xs text-ink-50 tabular-nums backdrop-blur">
+        {formatDuration(position)}
+      </span>
     </div>
   );
 }

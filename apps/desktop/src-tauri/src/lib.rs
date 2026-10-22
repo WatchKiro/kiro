@@ -130,6 +130,7 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             commands::player::player_set_audio_delay,
             commands::player::player_set_speed,
             commands::player::player_stats,
+            commands::player::player_preview,
         ]);
 
     #[cfg(not(native_player))]
@@ -636,8 +637,20 @@ mod tests {
             .expect("player_set_now_playing should be permitted");
         }
 
+        // A preview position must be a non-negative number.
+        for position in [json!(-1), json!(-0.5)] {
+            assert_eq!(
+                code("player_preview", json!({ "position": position })),
+                "INVALID_ARGUMENT"
+            );
+        }
+
         // Valid arguments, but nothing is attached (the mock runtime has no video surface).
         assert_eq!(code("player_stats", json!({})), "PLAYER_NOT_ATTACHED");
+        assert_eq!(
+            code("player_preview", json!({ "position": 12.5 })),
+            "PLAYER_NOT_ATTACHED"
+        );
         assert_eq!(
             code("player_set_paused", json!({ "paused": true })),
             "PLAYER_NOT_ATTACHED"
@@ -900,7 +913,7 @@ mod tests {
                 "skipIntros": false, "onlineSkipTimes": false,
                 "autoplayNext": true, "upNextSeconds": 10, "seekSeconds": 10, "resume": "always",
                 "rememberVolume": true, "volume": 100, "markWatchedPercent": 90,
-                "keepScreenOn": true, "audioPassthrough": false, "passthroughFormats": ["ac3", "dts"],
+                "keepScreenOn": true, "seekPreviews": true, "audioPassthrough": false, "passthroughFormats": ["ac3", "dts"],
             },
             "subtitles": {
                 "size": 100, "color": "#ffffff", "edge": "outline", "offset": 0,

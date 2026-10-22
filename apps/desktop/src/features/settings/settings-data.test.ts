@@ -49,6 +49,7 @@ describe('parseSettings', () => {
       volume: 45,
       markWatchedPercent: 80,
       keepScreenOn: false,
+      seekPreviews: false,
       audioPassthrough: true,
       passthroughFormats: ['eac3', 'dts', 'dtsHd'],
     },
@@ -153,6 +154,7 @@ describe('parseSettings', () => {
         volume: 131,
         markWatchedPercent: 99,
         keepScreenOn: 'no',
+        seekPreviews: 1,
       },
       subtitles: { size: 49, color: '#FFFFFF', edge: 'glow', offset: 41, preferredType: 'forced' },
     });

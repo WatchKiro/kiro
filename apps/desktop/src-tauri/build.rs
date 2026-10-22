@@ -139,6 +139,7 @@ fn main() {
             "player_set_audio_delay",
             "player_set_speed",
             "player_stats",
+            "player_preview",
         ])),
     )
     .expect("failed to run tauri-build");

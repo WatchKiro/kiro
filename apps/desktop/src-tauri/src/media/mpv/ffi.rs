@@ -1,6 +1,7 @@
 //! Raw declarations for the parts of libmpv's C API that Kiro uses.
 //!
-//! Hand-written from mpv's `client.h`, `render.h` and `render_gl.h` (client
+//! Hand-written from mpv's `client.h`, `render.h`, `render_gl.h` and
+//! `stream_cb.h` (client
 //! API 2.5, mpv 0.41), which carry this notice:
 //!
 //! > Copyright (C) 2017, 2018 the mpv developers
@@ -54,6 +55,7 @@ pub mod error {
     pub const UNKNOWN_FORMAT: c_int = -17;
     pub const UNSUPPORTED: c_int = -18;
     pub const NOT_IMPLEMENTED: c_int = -19;
+    pub const GENERIC: c_int = -20;
 }
 
 /// `mpv_format`.
@@ -154,6 +156,42 @@ pub struct mpv_opengl_fbo {
 
 // Windows imports from the DLL directly (no import library needed); macOS and
 // Linux link `-lmpv` (build.rs).
+// stream_cb.h: a protocol whose bytes the client supplies (seek-bar
+// previews read streams in bounded pieces through it, `preview_reader.rs`).
+// mpv calls these on its own threads; `read_fn` may block.
+
+/// Reads up to `nbytes` into `buf`: the number read, 0 at the end, -1 on error.
+pub type mpv_stream_cb_read_fn =
+    Option<unsafe extern "C" fn(cookie: *mut c_void, buf: *mut c_char, nbytes: u64) -> i64>;
+/// Moves to `offset`: the new offset, or a negative `mpv_error`.
+pub type mpv_stream_cb_seek_fn =
+    Option<unsafe extern "C" fn(cookie: *mut c_void, offset: i64) -> i64>;
+/// The total size, or `MPV_ERROR_UNSUPPORTED`.
+pub type mpv_stream_cb_size_fn = Option<unsafe extern "C" fn(cookie: *mut c_void) -> i64>;
+pub type mpv_stream_cb_close_fn = Option<unsafe extern "C" fn(cookie: *mut c_void)>;
+/// Asks a blocked `read_fn` to return soon (client API 1.106 and later).
+pub type mpv_stream_cb_cancel_fn = Option<unsafe extern "C" fn(cookie: *mut c_void)>;
+
+#[repr(C)]
+pub struct mpv_stream_cb_info {
+    pub cookie: *mut c_void,
+    pub read_fn: mpv_stream_cb_read_fn,
+    pub seek_fn: mpv_stream_cb_seek_fn,
+    pub size_fn: mpv_stream_cb_size_fn,
+    pub close_fn: mpv_stream_cb_close_fn,
+    pub cancel_fn: mpv_stream_cb_cancel_fn,
+}
+
+/// Opens `uri` (`protocol://...`): fills `info` and returns 0, or a negative
+/// `mpv_error`.
+pub type mpv_stream_cb_open_ro_fn = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        uri: *mut c_char,
+        info: *mut mpv_stream_cb_info,
+    ) -> c_int,
+>;
+
 #[cfg_attr(windows, link(name = "libmpv-2", kind = "raw-dylib"))]
 unsafe extern "C" {
     // client.h
@@ -190,6 +228,14 @@ unsafe extern "C" {
     pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
     pub fn mpv_request_log_messages(ctx: *mut mpv_handle, min_level: *const c_char) -> c_int;
     pub fn mpv_wakeup(ctx: *mut mpv_handle);
+
+    // stream_cb.h
+    pub fn mpv_stream_cb_add_ro(
+        ctx: *mut mpv_handle,
+        protocol: *const c_char,
+        user_data: *mut c_void,
+        open_fn: mpv_stream_cb_open_ro_fn,
+    ) -> c_int;
 
     // render.h
     pub fn mpv_render_context_create(

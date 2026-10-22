@@ -39,6 +39,9 @@ libmpv = [
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+# Seek-bar preview images, sent to the renderer as data: URLs. The version
+# Tauri already uses.
+base64 = "0.22"
 # Discord Rich Presence over Discord's local IPC (src/presence), used only
 # when the user turns it on. MIT. Pinned: the payload and socket handling
 # were reviewed at this version.
