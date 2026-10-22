@@ -315,6 +315,9 @@ pub enum PreviewKind {
     /// Next to where the pointer rests, for when it moves on: only while the
     /// player has plenty buffered.
     Prefetch,
+    /// One of a few spread over the video, made as it loads, to stand in
+    /// anywhere on the bar: only while the player has plenty buffered.
+    Storyboard,
     /// No frame: open the stream in the preview core, for the first hover.
     Warm,
 }
@@ -519,11 +522,20 @@ impl MpvPlayer {
     /// runtime. [`PreviewKind::Warm`] only opens the stream, and returns at
     /// once.
     pub fn preview(&self, position: f64, kind: PreviewKind) -> PreviewResult {
-        let min_buffer = match kind {
-            PreviewKind::Hover | PreviewKind::Warm => preview::MIN_BUFFER_SECONDS,
-            PreviewKind::Prefetch => preview::PREFETCH_MIN_BUFFER_SECONDS,
+        let demand = match kind {
+            PreviewKind::Hover | PreviewKind::Warm => preview::HOVER,
+            PreviewKind::Prefetch | PreviewKind::Storyboard => preview::BACKGROUND,
         };
-        if preview::could_stall_playback(&self.buffer_state(), min_buffer) {
+        let buffer = self.buffer_state();
+        if preview::could_stall_playback(&buffer, demand) {
+            if debug_log_enabled() {
+                eprintln!(
+                    "[kiro-preview] busy: {:.1} s buffered, {} KB/s in, {} KB/s played",
+                    buffer.cached_seconds.unwrap_or(0.0),
+                    buffer.input_rate.map_or(0.0, |rate| rate / 1024.0).round(),
+                    buffer.bitrate.map_or(0.0, |rate| rate / 1024.0).round(),
+                );
+            }
             return PreviewResult::Busy;
         }
         if kind == PreviewKind::Warm {
@@ -546,12 +558,20 @@ impl MpvPlayer {
 
     fn buffer_state(&self) -> BufferState {
         let (position, duration) = self.shared.model().timeline();
+        // Bytes per second the stream plays at: the file's size over its
+        // length (not known for a live or chunked stream).
+        let bitrate = match (self.mpv.get_property::<f64>("file-size").ok(), duration) {
+            (Some(size), Some(duration)) if duration > 0.0 => Some(size / duration),
+            _ => None,
+        };
         BufferState {
             buffering: self.mpv.get_property("paused-for-cache").unwrap_or(false),
             via_network: self.mpv.get_property("demuxer-via-network").unwrap_or(true),
             cached_seconds: self.mpv.get_property("demuxer-cache-duration").ok(),
             position,
             duration,
+            input_rate: self.mpv.get_property::<f64>("cache-speed").ok(),
+            bitrate,
         }
     }
 

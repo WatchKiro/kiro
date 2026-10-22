@@ -909,7 +909,17 @@ function Controls({
   const drag = useRef<DragState>({ position: null });
   /** A frame of the video above the seek bar while hovering (Settings → Playback). */
   const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
-  const preview = useSeekPreview(seekPreviews, view.duration);
+  const previewStarts = useMemo(
+    () => [...view.chapters.map((chapter) => chapter.start), ...segments.map((part) => part.start)],
+    [view.chapters, segments],
+  );
+  const preview = useSeekPreview({
+    enabled: seekPreviews,
+    duration: view.duration,
+    active: !hidden,
+    position: view.position,
+    starts: previewStarts,
+  });
   const trackHover = (event: PointerEvent<HTMLDivElement>) => {
     if (!view.duration) return;
     const bounds = event.currentTarget.getBoundingClientRect();

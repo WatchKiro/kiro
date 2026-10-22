@@ -3,17 +3,23 @@ import { describe, it, mock } from 'node:test';
 
 import {
   BUSY_RETRY_MS,
+  BACKGROUND_DELAY_MS,
   HOVER_DELAY_MS,
+  MAX_BACKGROUND_RETRIES,
   MAX_PREFETCHES,
+  MAX_SEEDS,
   NEAREST_CELLS,
   PREFETCH_DELAY_MS,
   PreviewCache,
   PreviewScheduler,
+  STORYBOARD_FRAMES,
   WARM_INTERVAL_MS,
+  backgroundSlots,
   parsePlayerPreview,
   previewNeighbours,
   previewSlot,
   previewStep,
+  storyboardReach,
 } from '@/features/playback/seek-preview';
 import type { PlayerPreview, PreviewKind } from '@/services/player';
 
@@ -40,6 +46,44 @@ describe('previewStep and previewSlot', () => {
     assert.deepEqual(previewSlot(60, 60), { index: 11, position: 57.5 });
     // A last cell shorter than the step: its middle would be past the end.
     assert.deepEqual(previewSlot(61, 62), { index: 12, position: 61.5 });
+  });
+
+  it('lists the cells to make as the stream loads: where it started, chapters, then a storyboard', () => {
+    // A 2853 s video: 15 s cells, 191 of them.
+    const slots = backgroundSlots(2853, 1830, [0, 95, 2700]);
+    const seeds = slots.filter((slot) => slot.kind === 'prefetch');
+    assert.deepEqual(
+      seeds.map((slot) => slot.index),
+      [122, 121, 0, 6, 180],
+      'the start, the cell before it, then each chapter',
+    );
+    const storyboard = slots.filter((slot) => slot.kind === 'storyboard');
+    assert.equal(storyboard.length, STORYBOARD_FRAMES);
+    assert.equal(storyboard[0]?.index, 5, 'half a spacing in');
+    assert.equal(storyboard[15]?.index, 184);
+    assert.equal(new Set(slots.map((slot) => slot.index)).size, slots.length, 'no cell twice');
+
+    // Seeds are capped, and outside the video ignored; a storyboard cell
+    // already seeded isn't repeated.
+    const many = backgroundSlots(
+      2853,
+      0,
+      Array.from({ length: 20 }, (_, i) => i * 100 + 50),
+    );
+    assert.equal(many.filter((slot) => slot.kind === 'prefetch').length, MAX_SEEDS);
+    const short = backgroundSlots(60, 0, [-5, 70]);
+    assert.deepEqual(
+      short.map((slot) => [slot.index, slot.kind]),
+      [
+        [0, 'prefetch'],
+        ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((index) => [index, 'storyboard']),
+      ],
+    );
+  });
+
+  it('reaches as far as half the storyboard spacing for a stand-in', () => {
+    assert.equal(storyboardReach(2853), 6);
+    assert.equal(storyboardReach(60), NEAREST_CELLS);
   });
 
   it('names the cells either side, the next one first, inside the video', () => {
@@ -113,26 +157,32 @@ describe('PreviewCache', () => {
     assert.equal(cache.available, false);
   });
 
-  it('keeps a prefetch refusal from holding up hovers, and a budget on prefetches', () => {
+  it('keeps a background refusal from holding up hovers, and a budget on background frames', () => {
     const cache = new PreviewCache();
     cache.record(1, { status: 'busy' }, 1000, 'prefetch');
     assert.equal(cache.wants(1, 1000), true, 'hovers still ask');
-    assert.equal(cache.wantsPrefetch(1, 1000), false);
-    assert.equal(cache.wantsPrefetch(1, 1000 + BUSY_RETRY_MS), true);
+    assert.equal(cache.wantsBackground(1, 1000, 'prefetch'), false);
+    assert.equal(cache.wantsBackground(1, 1000, 'storyboard'), false);
+    assert.equal(cache.wantsBackground(1, 1000 + BUSY_RETRY_MS, 'prefetch'), true);
     // A hover's refusal holds up both.
     cache.record(1, { status: 'busy' }, 2000);
-    assert.equal(cache.wantsPrefetch(1, 2000), false);
+    assert.equal(cache.wantsBackground(1, 2000, 'prefetch'), false);
 
     const budgeted = new PreviewCache();
     for (let index = 0; index < MAX_PREFETCHES; index++) {
       budgeted.record(index, frame(index * 5), 0, 'prefetch');
     }
-    assert.equal(budgeted.wantsPrefetch(100, 0), false, 'the budget is spent');
+    assert.equal(budgeted.wantsBackground(100, 0, 'prefetch'), false, 'the budget is spent');
+    assert.equal(budgeted.wantsBackground(100, 0, 'storyboard'), true, 'its own budget');
     assert.equal(budgeted.wants(100, 0), true, 'hovers are not budgeted');
-    // Hovered frames don't count against it.
+    for (let index = 100; index < 100 + STORYBOARD_FRAMES; index++) {
+      budgeted.record(index, frame(index * 5), 0, 'storyboard');
+    }
+    assert.equal(budgeted.wantsBackground(200, 0, 'storyboard'), false);
+    // Hovered frames don't count against either.
     const hovered = new PreviewCache();
     for (let index = 0; index < MAX_PREFETCHES; index++) hovered.record(index, frame(index * 5), 0);
-    assert.equal(hovered.wantsPrefetch(100, 0), true);
+    assert.equal(hovered.wantsBackground(100, 0, 'prefetch'), true);
   });
 });
 
@@ -326,6 +376,98 @@ describe('PreviewScheduler', () => {
       now += PREFETCH_DELAY_MS;
       mock.timers.tick(PREFETCH_DELAY_MS);
       assert.equal(calls.length, 2);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it('makes background cells while the pointer asks for nothing, hovers first', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let now = 0;
+      const cache = new PreviewCache();
+      const { calls, request } = fakeRequest();
+      const scheduler = new PreviewScheduler(
+        cache,
+        request,
+        () => undefined,
+        () => now,
+      );
+      scheduler.background([
+        { index: 10, position: 157.5, kind: 'prefetch' },
+        { index: 3, position: 52.5, kind: 'storyboard' },
+        { index: 20, position: 307.5, kind: 'storyboard' },
+      ]);
+      mock.timers.tick(BACKGROUND_DELAY_MS - 1);
+      assert.equal(calls.length, 0, "the stream's first moments are the player's");
+      mock.timers.tick(1);
+      assert.deepEqual(
+        calls.map((call) => [call.position, call.kind]),
+        [[157.5, 'prefetch']],
+      );
+      // A hover while one is made comes next, then the background goes on.
+      scheduler.want({ index: 7, position: 112.5 });
+      mock.timers.tick(HOVER_DELAY_MS);
+      assert.equal(calls.length, 1, 'one at a time');
+      calls[0]?.resolve(frame(155));
+      await settle();
+      assert.deepEqual(calls[1] && [calls[1].position, calls[1].kind], [112.5, 'hover']);
+      calls[1]?.resolve(frame(110));
+      await settle();
+      // Resting on the hovered cell: its neighbours would come first, but
+      // there are none given; the storyboard goes on after the rest.
+      assert.equal(calls.length, 2);
+      now = PREFETCH_DELAY_MS;
+      mock.timers.tick(PREFETCH_DELAY_MS);
+      assert.deepEqual(calls[2] && [calls[2].position, calls[2].kind], [52.5, 'storyboard']);
+      calls[2]?.resolve(frame(50));
+      await settle();
+      // The pointer leaving doesn't stop it.
+      scheduler.want(null);
+      mock.timers.tick(0);
+      assert.deepEqual(calls[3] && [calls[3].position, calls[3].kind], [307.5, 'storyboard']);
+      calls[3]?.resolve(frame(305));
+      await settle();
+      mock.timers.tick(BACKGROUND_DELAY_MS * 2);
+      assert.equal(calls.length, 4, 'all made');
+      assert.equal(cache.size, 4);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it('tries background cells again after busy a few times, then leaves them', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let now = 0;
+      const cache = new PreviewCache();
+      const { calls, request } = fakeRequest();
+      const scheduler = new PreviewScheduler(
+        cache,
+        request,
+        () => undefined,
+        () => now,
+      );
+      scheduler.background([{ index: 3, position: 52.5, kind: 'storyboard' }]);
+      mock.timers.tick(BACKGROUND_DELAY_MS);
+      for (let attempt = 0; attempt <= MAX_BACKGROUND_RETRIES; attempt++) {
+        assert.equal(calls.length, attempt + 1);
+        calls[attempt]?.resolve({ status: 'busy' });
+        await settle();
+        now += BUSY_RETRY_MS;
+        mock.timers.tick(BUSY_RETRY_MS);
+      }
+      assert.equal(calls.length, MAX_BACKGROUND_RETRIES + 1, 'given up');
+      // A hover still asks, and is not held up by the background refusals.
+      scheduler.want({ index: 9, position: 142.5 });
+      mock.timers.tick(HOVER_DELAY_MS);
+      assert.equal(calls.at(-1)?.kind, 'hover');
+      // Stopping ends everything.
+      scheduler.stop();
+      calls.at(-1)?.resolve(frame(140));
+      await settle();
+      mock.timers.tick(BACKGROUND_DELAY_MS * 2);
+      assert.equal(calls.length, MAX_BACKGROUND_RETRIES + 2);
     } finally {
       mock.timers.reset();
     }

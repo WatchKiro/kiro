@@ -659,6 +659,7 @@ mod tests {
             json!(null),
             json!("hover"),
             json!("prefetch"),
+            json!("storyboard"),
             json!("warm"),
         ] {
             assert_eq!(

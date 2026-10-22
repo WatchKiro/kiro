@@ -321,14 +321,21 @@ impl Worker {
             position,
             &dir.join("frame.jpg"),
             &self.shared.stop,
+            core.reader.as_deref(),
         ) {
-            Ok(frame) => {
+            Ok((frame, needed)) => {
                 self.failures = 0;
+                if let (Some(reader), Some(needed)) = (&core.reader, needed) {
+                    reader.learn(needed);
+                }
                 if debug_log_enabled() {
-                    let read = match (&core.reader, read_before) {
-                        (Some(reader), Some(before)) => {
-                            format!("{} KB read", (reader.bytes_read() - before) / 1024)
-                        }
+                    let read = match (&core.reader, read_before, needed) {
+                        (Some(reader), Some(before), Some(needed)) => format!(
+                            "{} KB read ({} KB taken for the frame, next first read {} KB)",
+                            (reader.bytes_read() - before) / 1024,
+                            needed / 1024,
+                            reader.first_read() / 1024
+                        ),
                         _ => "read by mpv".into(),
                     };
                     eprintln!(
@@ -504,11 +511,13 @@ fn create_core() -> client::Result<Mpv> {
         init.set_option("vd-lavc-skiploopfilter", "all")?;
         init.set_option("vd-lavc-fast", true)?;
         // The keyframe before each position, and as little reading ahead as
-        // mpv allows.
+        // mpv allows: the demuxer stops once it holds this much, which one
+        // keyframe packet exceeds, so a preview reads about one keyframe
+        // (measured in docs/playback.md) rather than filling a queue.
         init.set_option("hr-seek", "no")?;
         init.set_option("cache", "no")?;
         init.set_option("demuxer-readahead-secs", 0.0_f64)?;
-        init.set_option("demuxer-max-bytes", "1MiB")?;
+        init.set_option("demuxer-max-bytes", "64KiB")?;
         init.set_option("demuxer-max-back-bytes", 0_i64)?;
         let scale = format!("scale={PREVIEW_WIDTH}:-2");
         init.set_option("vf", scale.as_str())?;
@@ -519,21 +528,36 @@ fn create_core() -> client::Result<Mpv> {
 }
 
 /// Seeks `mpv` to the keyframe before `position` and saves it to `file`.
-fn capture(mpv: &Mpv, position: f64, file: &Path, stop: &AtomicBool) -> Result<Frame, Failure> {
+/// With a bounded `reader`, also returns what mpv took from it before the
+/// frame was there, for sizing the next seek's first read.
+fn capture(
+    mpv: &Mpv,
+    position: f64,
+    file: &Path,
+    stop: &AtomicBool,
+    reader: Option<&ReaderContext>,
+) -> Result<(Frame, Option<u64>), Failure> {
+    let before = reader.map(|reader| reader.bytes_taken());
     let target = format!("{position:.3}");
     mpv.command("seek", &[&target, "absolute+keyframes"])?;
     wait_for(mpv, SEEK_TIMEOUT, stop, |event| {
         matches!(event, Event::PlaybackRestart)
     })?;
+    let needed = reader
+        .zip(before)
+        .map(|(reader, before)| reader.bytes_taken() - before);
     let at = mpv.get_property::<f64>("time-pos").unwrap_or(position);
     let path = file.to_string_lossy();
     mpv.command("screenshot-to-file", &[&path, "video"])?;
     let jpeg = fs::read(file).map_err(Failure::Io)?;
     let _ = fs::remove_file(file);
-    Ok(Frame {
-        position: at.max(0.0),
-        jpeg,
-    })
+    Ok((
+        Frame {
+            position: at.max(0.0),
+            jpeg,
+        },
+        needed,
+    ))
 }
 
 /// Waits for an event `done` accepts, failing on an error, the end of the
@@ -565,9 +589,11 @@ fn wait_for(
 
 /// Whether making a preview now could hold up playback. Previews download
 /// part of the stream, so they wait while the player is buffering, or has
-/// less than `min_buffer` seconds of a network stream buffered (or less
-/// than what's left of it, near the end).
-pub fn could_stall_playback(buffer: &BufferState, min_buffer: f64) -> bool {
+/// less of a network stream buffered than `demand` asks (or less than what's
+/// left of it, near the end). A link with headroom to spare, bringing video
+/// in faster than it plays by `demand.headroom` or more, needs only
+/// [`HEADROOM_MIN_BUFFER_SECONDS`]: the player won't be short of it.
+pub fn could_stall_playback(buffer: &BufferState, demand: Demand) -> bool {
     if buffer.buffering {
         return true;
     }
@@ -576,16 +602,43 @@ pub fn could_stall_playback(buffer: &BufferState, min_buffer: f64) -> bool {
     }
     let left = match (buffer.position, buffer.duration) {
         (Some(position), Some(duration)) => (duration - position - 1.0).max(0.0),
-        _ => min_buffer,
+        _ => f64::INFINITY,
     };
-    buffer.cached_seconds.unwrap_or(0.0) < min_buffer.min(left)
+    let cached = buffer.cached_seconds.unwrap_or(0.0);
+    if cached >= demand.min_buffer.min(left) {
+        return false;
+    }
+    let fast = match (buffer.input_rate, buffer.bitrate) {
+        (Some(rate), Some(bitrate)) if bitrate > 0.0 => rate >= demand.headroom * bitrate,
+        _ => false,
+    };
+    !(fast && cached >= HEADROOM_MIN_BUFFER_SECONDS.min(left))
 }
 
-/// Buffered video a network stream must have before a preview the pointer
-/// is waiting for is made.
-pub const MIN_BUFFER_SECONDS: f64 = 10.0;
-/// ...and before one made ahead of the pointer (a prefetch), which can wait.
-pub const PREFETCH_MIN_BUFFER_SECONDS: f64 = 20.0;
+/// What the player must have buffered before a preview is made.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Demand {
+    /// Seconds of a network stream buffered.
+    pub min_buffer: f64,
+    /// Or, with [`HEADROOM_MIN_BUFFER_SECONDS`] buffered, the link bringing
+    /// video in this many times faster than it plays.
+    pub headroom: f64,
+}
+
+/// For a preview the pointer is waiting for.
+pub const HOVER: Demand = Demand {
+    min_buffer: 10.0,
+    headroom: 2.0,
+};
+/// For one made ahead of the pointer (a prefetch, the storyboard), which can
+/// wait.
+pub const BACKGROUND: Demand = Demand {
+    min_buffer: 20.0,
+    headroom: 3.0,
+};
+/// Buffered video a fast link must still have before a preview is made: the
+/// first moments after a load or a seek are the player's.
+pub const HEADROOM_MIN_BUFFER_SECONDS: f64 = 3.0;
 
 /// The player's buffer, for [`could_stall_playback`].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -598,6 +651,10 @@ pub struct BufferState {
     pub cached_seconds: Option<f64>,
     pub position: Option<f64>,
     pub duration: Option<f64>,
+    /// Bytes per second arriving over the last second (`cache-speed`).
+    pub input_rate: Option<f64>,
+    /// Bytes per second the stream plays at (`file-size` over `duration`).
+    pub bitrate: Option<f64>,
 }
 
 #[cfg(test)]
@@ -611,11 +668,13 @@ mod tests {
             cached_seconds: Some(cached),
             position: Some(position),
             duration: Some(duration),
+            input_rate: None,
+            bitrate: None,
         }
     }
 
     fn stalls(buffer: &BufferState) -> bool {
-        could_stall_playback(buffer, MIN_BUFFER_SECONDS)
+        could_stall_playback(buffer, HOVER)
     }
 
     #[test]
@@ -634,13 +693,65 @@ mod tests {
     }
 
     #[test]
-    fn prefetches_wait_for_more() {
+    fn background_previews_wait_for_more() {
         let buffer = network(15.0, 100.0, 2800.0);
-        assert!(!could_stall_playback(&buffer, MIN_BUFFER_SECONDS));
-        assert!(could_stall_playback(&buffer, PREFETCH_MIN_BUFFER_SECONDS));
+        assert!(!could_stall_playback(&buffer, HOVER));
+        assert!(could_stall_playback(&buffer, BACKGROUND));
         assert!(!could_stall_playback(
             &network(25.0, 100.0, 2800.0),
-            PREFETCH_MIN_BUFFER_SECONDS
+            BACKGROUND
+        ));
+    }
+
+    #[test]
+    fn a_fast_link_needs_only_a_little_buffered() {
+        // A 4 MB/s stream arriving at 10 MB/s: 2.5 times faster than it plays.
+        let fast = BufferState {
+            input_rate: Some(10e6),
+            bitrate: Some(4e6),
+            ..network(4.0, 100.0, 2800.0)
+        };
+        assert!(!could_stall_playback(&fast, HOVER));
+        assert!(
+            could_stall_playback(&fast, BACKGROUND),
+            "3 times for the background"
+        );
+        assert!(!could_stall_playback(
+            &BufferState {
+                input_rate: Some(13e6),
+                ..fast
+            },
+            BACKGROUND
+        ));
+        // But not in the first moments after a load or a seek...
+        assert!(could_stall_playback(
+            &BufferState {
+                cached_seconds: Some(2.0),
+                ..fast
+            },
+            HOVER
+        ));
+        // ...nor when the link only just keeps up, or the rates aren't known.
+        assert!(could_stall_playback(
+            &BufferState {
+                input_rate: Some(5e6),
+                ..fast
+            },
+            HOVER
+        ));
+        assert!(could_stall_playback(
+            &BufferState {
+                bitrate: None,
+                ..fast
+            },
+            HOVER
+        ));
+        assert!(could_stall_playback(
+            &BufferState {
+                bitrate: Some(0.0),
+                ..fast
+            },
+            HOVER
         ));
     }
 

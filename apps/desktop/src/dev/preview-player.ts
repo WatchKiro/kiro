@@ -11,7 +11,8 @@
  *
  * Seek-bar previews are drawn frames labelled with the keyframe's time (a
  * keyframe every 4 s). `localStorage['kiro.preview.previews']`: `busy` (the
- * player is short of buffered video), `unavailable`, or `slow`.
+ * player is short of buffered video), `tight` (enough for the pointer's
+ * previews, not for background ones), `unavailable`, or `slow`.
  */
 import type { Chapter, MediaTrack, PlaybackState } from '@kiro/player-core';
 
@@ -358,6 +359,7 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
     if (kind === 'warm') return { status: 'warming' };
     await new Promise((resolve) => window.setTimeout(resolve, mode === 'slow' ? 1500 : 180));
     if (mode === 'busy') return { status: 'busy' };
+    if (mode === 'tight' && kind !== 'hover') return { status: 'busy' };
     if (mode === 'unavailable' || duration === null) return { status: 'unavailable' };
     const keyframe = Math.floor(Math.min(Number(position), duration) / 4) * 4;
     return { status: 'frame', position: keyframe, image: previewFrame(keyframe) };

@@ -9,11 +9,14 @@
  * refuses while the player is short of buffered video (`busy`): the bar then
  * shows only the time, and asks again a little later.
  *
- * To have frames sooner: the core opens the stream when the pointer reaches
- * the bar (`warm`), a nearby frame stands in while a cell's own is made
- * (`PreviewCache.nearest`), and the cells either side of one the pointer
- * rests on are made ahead (`prefetch`, only while the player has plenty
- * buffered, and a limited number per stream).
+ * To have frames sooner: the core opens the stream when the controls appear
+ * (`warm`); a nearby frame stands in while a cell's own is made
+ * (`PreviewCache.nearest`); the cells either side of one the pointer rests
+ * on are made ahead (`prefetch`); and as the stream loads, a few cells
+ * people look at first (where it resumed, chapter and skip-part starts) and
+ * a coarse storyboard of 16 frames spread over the video are made in the
+ * background, one at a time behind whatever the pointer wants, only while
+ * the player has plenty buffered, and a limited number per stream.
  */
 import type { PlayerPreview, PreviewKind } from '@/services/player';
 
@@ -80,15 +83,16 @@ export interface PreviewFrame {
 /**
  * The previews made for one stream, by grid cell, and whether asking is
  * worthwhile: not once the core says the stream can't be previewed, not
- * again for a while after it says it's busy, and (prefetches) not past a
- * budget per stream.
+ * again for a while after it says it's busy, and (background frames) not
+ * past a budget per stream.
  */
 export class PreviewCache {
   private readonly frames = new Map<number, PreviewFrame>();
   private unavailable = false;
   private busyUntil = 0;
-  private prefetchBusyUntil = 0;
+  private backgroundBusyUntil = 0;
   private prefetches = 0;
+  private storyboards = 0;
 
   get(index: number): PreviewFrame | undefined {
     return this.frames.get(index);
@@ -114,11 +118,13 @@ export class PreviewCache {
     return !this.unavailable && now >= this.busyUntil && !this.frames.has(index);
   }
 
-  /** Whether to ask for cell `index` ahead of the pointer now. */
-  wantsPrefetch(index: number, now: number): boolean {
-    return (
-      this.wants(index, now) && now >= this.prefetchBusyUntil && this.prefetches < MAX_PREFETCHES
-    );
+  /** Whether to ask for cell `index` in the background now, as `kind`. */
+  wantsBackground(index: number, now: number, kind: BackgroundKind): boolean {
+    const budget =
+      kind === 'storyboard'
+        ? this.storyboards < STORYBOARD_FRAMES
+        : this.prefetches < MAX_PREFETCHES;
+    return this.wants(index, now) && now >= this.backgroundBusyUntil && budget;
   }
 
   /** The core has not said the stream can't be previewed. */
@@ -132,12 +138,13 @@ export class PreviewCache {
       case 'frame':
         this.frames.set(index, { image: result.image, position: result.position });
         if (kind === 'prefetch') this.prefetches++;
+        else if (kind === 'storyboard') this.storyboards++;
         break;
       case 'busy':
-        // A prefetch needs more buffered than a hover: its refusal says
-        // nothing about hovers.
-        if (kind === 'prefetch') this.prefetchBusyUntil = now + BUSY_RETRY_MS;
-        else this.busyUntil = now + BUSY_RETRY_MS;
+        // Background frames need more buffered than a hover: their refusal
+        // says nothing about hovers.
+        if (kind === 'hover') this.busyUntil = now + BUSY_RETRY_MS;
+        else this.backgroundBusyUntil = now + BUSY_RETRY_MS;
         break;
       case 'unavailable':
         this.unavailable = true;
@@ -160,6 +167,9 @@ export interface PreviewNearest {
   distance: number;
 }
 
+/** A preview made without the pointer asking for it. */
+export type BackgroundKind = 'prefetch' | 'storyboard';
+
 /** A stand-in frame comes from at most this many cells away. */
 export const NEAREST_CELLS = 2;
 /** After `busy`, wait this long before asking again. */
@@ -170,6 +180,14 @@ export const HOVER_DELAY_MS = 120;
 export const PREFETCH_DELAY_MS = 400;
 /** Prefetched frames per stream, at most (each reads part of the stream). */
 export const MAX_PREFETCHES = 40;
+/** Frames spread over the video to stand in anywhere on the bar. */
+export const STORYBOARD_FRAMES = 16;
+/** Cells made first as a stream loads (where it resumed, chapters), at most. */
+export const MAX_SEEDS = 8;
+/** Background frames start this long after the stream is known: its first moments are the player's. */
+export const BACKGROUND_DELAY_MS = 1500;
+/** Background frames are tried again after `busy` at most this many times per stream. */
+export const MAX_BACKGROUND_RETRIES = 3;
 /** Warming the preview core is asked for at most this often. */
 export const WARM_INTERVAL_MS = 20_000;
 
@@ -177,6 +195,11 @@ export const WARM_INTERVAL_MS = 20_000;
 export interface PreviewSlot {
   index: number;
   position: number;
+}
+
+/** A cell to make in the background, and as what. */
+export interface BackgroundSlot extends PreviewSlot {
+  kind: BackgroundKind;
 }
 
 /** The cells either side of `slot`, nearest first, inside the video. */
@@ -191,17 +214,63 @@ export function previewNeighbours(slot: PreviewSlot, duration: number): PreviewS
 }
 
 /**
- * Asks for the preview of the cell under the pointer: once it has been
- * hovered for `HOVER_DELAY_MS`, one request at a time, then the newest cell
- * wanted when that one finishes. After `busy` it asks again
- * `BUSY_RETRY_MS` later if the pointer is still there. Once the pointer has
- * rested `PREFETCH_DELAY_MS` on a cell it has, it asks for the cells either
- * side, so a small move finds its frame ready.
+ * The cells to make as a stream loads, in order: where it started (and the
+ * cell before, for a step back), then each of `starts` (chapter and
+ * skip-part starts), at most `MAX_SEEDS`, then `STORYBOARD_FRAMES` spread
+ * evenly over the video. No cell twice.
+ */
+export function backgroundSlots(
+  duration: number,
+  startPosition: number,
+  starts: readonly number[],
+): BackgroundSlot[] {
+  const slots: BackgroundSlot[] = [];
+  const seen = new Set<number>();
+  const add = (position: number, kind: BackgroundKind) => {
+    const slot = previewSlot(position, duration);
+    if (seen.has(slot.index)) return;
+    seen.add(slot.index);
+    slots.push({ ...slot, kind });
+  };
+  const step = previewStep(duration);
+  const seeds = [startPosition, startPosition - step, ...starts].filter(
+    (position) => position >= 0 && position < duration,
+  );
+  for (const position of seeds) {
+    if (slots.length >= MAX_SEEDS) break;
+    add(position, 'prefetch');
+  }
+  for (let frame = 0; frame < STORYBOARD_FRAMES; frame++) {
+    add(((frame + 0.5) / STORYBOARD_FRAMES) * duration, 'storyboard');
+  }
+  return slots;
+}
+
+/**
+ * How far a stand-in frame may come from once the storyboard is there: half
+ * the storyboard's spacing, so every cell has one within reach.
+ */
+export function storyboardReach(duration: number): number {
+  const cells = Math.ceil(duration / previewStep(duration));
+  return Math.max(NEAREST_CELLS, Math.ceil(cells / STORYBOARD_FRAMES / 2));
+}
+
+/**
+ * Asks for previews, one request at a time, the most wanted first: the cell
+ * under the pointer once it has been hovered for `HOVER_DELAY_MS` (and the
+ * newest cell wanted when that one finishes; after `busy`, again
+ * `BUSY_RETRY_MS` later if the pointer is still there); then, once the
+ * pointer has rested `PREFETCH_DELAY_MS` on a cell it has, the cells either
+ * side; then, with the pointer away or at rest, the background cells
+ * (`background`), which stop for a while when the core is busy and give up
+ * after `MAX_BACKGROUND_RETRIES` refusals.
  */
 export class PreviewScheduler {
   private wanted: PreviewSlot | null = null;
   private neighbours: PreviewSlot[] = [];
   private wantedSince = 0;
+  private queued: BackgroundSlot[] = [];
+  private backgroundRetries = 0;
   private inFlight = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pausedByBusy = false;
@@ -224,11 +293,22 @@ export class PreviewScheduler {
     if (slot?.index === this.wanted?.index) return;
     this.wanted = slot;
     this.wantedSince = this.now();
-    this.schedule(slot ? HOVER_DELAY_MS : null);
+    // The pointer left: background work goes on.
+    this.schedule(slot ? HOVER_DELAY_MS : this.queued.length > 0 ? 0 : null);
   }
 
   /**
-   * The pointer reached the seek bar: has the core open the stream, so the
+   * The cells to make while the pointer asks for nothing, in order, starting
+   * `BACKGROUND_DELAY_MS` from now.
+   */
+  background(slots: BackgroundSlot[]): void {
+    this.queued = slots;
+    if (slots.length === 0 || this.timer !== undefined) return;
+    this.schedule(BACKGROUND_DELAY_MS);
+  }
+
+  /**
+   * The pointer reached the controls: has the core open the stream, so the
    * first preview doesn't wait for that. Not more than once in
    * `WARM_INTERVAL_MS`, and not once the stream is known to be unpreviewable.
    */
@@ -239,10 +319,14 @@ export class PreviewScheduler {
     void this.request(0, 'warm').catch(() => undefined);
   }
 
-  /** Forgets what was wanted (the pointer left, or the page went away). */
+  /**
+   * Forgets everything wanted (the page went away). What's in flight still
+   * lands in the cache; nothing follows it.
+   */
   stop(): void {
     this.wanted = null;
     this.neighbours = [];
+    this.queued = [];
     this.schedule(null);
   }
 
@@ -256,26 +340,42 @@ export class PreviewScheduler {
 
   private schedule(delay: number | null): void {
     clearTimeout(this.timer);
-    this.timer = delay === null ? undefined : setTimeout(() => this.fetch(), delay);
+    this.timer =
+      delay === null
+        ? undefined
+        : setTimeout(() => {
+            this.timer = undefined;
+            this.fetch();
+          }, delay);
   }
 
-  /** The hovered cell if it is still wanted; else, after a rest, a neighbour. */
+  /** The hovered cell if still wanted; else, after a rest, a neighbour; else a background cell. */
   private fetch(): void {
-    const target = this.wanted;
-    if (this.inFlight || !target) return;
+    if (this.inFlight) return;
     const now = this.now();
-    if (this.cache.wants(target.index, now)) {
-      this.issue(target, 'hover');
-      return;
+    const target = this.wanted;
+    if (target) {
+      if (this.cache.wants(target.index, now)) {
+        this.issue(target, 'hover');
+        return;
+      }
+      // Refused for now (busy): the retry timer will ask again.
+      if (!this.cache.get(target.index)) return;
+      const rested = now - this.wantedSince;
+      if (rested < PREFETCH_DELAY_MS) {
+        this.schedule(PREFETCH_DELAY_MS - rested);
+        return;
+      }
+      const next = this.neighbours.find((slot) =>
+        this.cache.wantsBackground(slot.index, now, 'prefetch'),
+      );
+      if (next) {
+        this.issue(next, 'prefetch');
+        return;
+      }
     }
-    if (!this.cache.get(target.index)) return;
-    const rested = now - this.wantedSince;
-    if (rested < PREFETCH_DELAY_MS) {
-      this.schedule(PREFETCH_DELAY_MS - rested);
-      return;
-    }
-    const next = this.neighbours.find((slot) => this.cache.wantsPrefetch(slot.index, now));
-    if (next) this.issue(next, 'prefetch');
+    const next = this.queued.find((slot) => this.cache.wantsBackground(slot.index, now, slot.kind));
+    if (next) this.issue(next, next.kind);
   }
 
   private issue(target: PreviewSlot, kind: PreviewKind): void {
@@ -293,12 +393,23 @@ export class PreviewScheduler {
         this.cache.record(target.index, result, this.now(), kind);
         if (kind === 'hover') this.pausedByBusy = result.status === 'busy';
         this.onResult();
-        if (!this.wanted) return;
-        if (kind === 'hover' && result.status === 'busy') this.schedule(BUSY_RETRY_MS);
-        // On to the next: the pointer moved while this one was made, or
-        // (after a frame) a neighbour is still to make. Not after a refusal
-        // for the same cell, which would only be repeated.
-        else if (result.status === 'frame' || this.wanted !== hovered) this.fetch();
+        if (kind === 'hover') {
+          if (result.status === 'busy') this.schedule(BUSY_RETRY_MS);
+          // On to the next: the pointer moved while this one was made, or
+          // (after a frame) a neighbour or the background is still to make.
+          // Not after a refusal for the same cell, which would only be repeated.
+          else if (result.status === 'frame' || this.wanted !== hovered) this.fetch();
+        } else if (result.status === 'frame' || this.wanted !== hovered) {
+          this.fetch();
+        } else if (
+          result.status === 'busy' &&
+          this.queued.length > 0 &&
+          this.backgroundRetries < MAX_BACKGROUND_RETRIES
+        ) {
+          // Plenty will be buffered in a while.
+          this.backgroundRetries++;
+          this.schedule(BUSY_RETRY_MS);
+        }
       });
   }
 }

@@ -8,7 +8,11 @@
 //! ranges: [`FIRST_READ`] after each seek, doubling while mpv keeps reading
 //! straight on, up to [`MAX_READ`]. Measured on realistic streams that cuts
 //! a preview's download 2 to 4 times, for a round trip or two more
-//! (docs/playback.md, "Seek-bar previews").
+//! (docs/playback.md, "Seek-bar previews"). Those round trips go after the
+//! first previews: the preview core tells the reader how much mpv took from
+//! it before each frame was there ([`ReaderContext::learn`]; one keyframe's
+//! worth, which varies by stream far more than within one), and the next
+//! seek asks for the median of that at once, up to [`MAX_FIRST_READ`].
 //!
 //! mpv calls the callbacks on its own threads, and `read` may block: requests
 //! run on Tauri's async runtime with `block_on`, bounded by
@@ -17,9 +21,10 @@
 //! ([`ReaderContext::ranges_refused`]); other failures to open fall back to
 //! mpv's own reading.
 
+use std::collections::VecDeque;
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use url::Url;
@@ -35,6 +40,12 @@ pub const PROTOCOL: &str = "kiro-preview";
 pub const FIRST_READ: u64 = 256 * 1024;
 /// The most asked for at once, however long mpv reads straight on.
 pub const MAX_READ: u64 = 512 * 1024;
+/// The most a learned first read grows to: a 4K keyframe or two.
+pub const MAX_FIRST_READ: u64 = 1024 * 1024;
+/// Seeks whose reads are remembered, for the median.
+const LEARNED_BURSTS: usize = 8;
+/// First reads are rounded up to this.
+const READ_GRANULARITY: u64 = 64 * 1024;
 /// One range request, connecting included. mpv waits for `read` to return
 /// (also when the preview core is freed), so this bounds that wait.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -51,9 +62,14 @@ pub fn wrap(url: &str) -> String {
 pub struct ReaderContext {
     client: reqwest::Client,
     bytes: AtomicU64,
+    /// Bytes mpv has taken from its readers (what it needed, as against
+    /// what was downloaded to have it).
+    taken: AtomicU64,
     /// The host answered without the range asked for: it can't be previewed
     /// (seeking would mean reading the stream from the start).
     refused: AtomicBool,
+    /// What the last few previews downloaded before their frame was there.
+    bursts: Mutex<VecDeque<u64>>,
 }
 
 impl ReaderContext {
@@ -79,13 +95,47 @@ impl ReaderContext {
         Ok(Arc::new(Self {
             client,
             bytes: AtomicU64::new(0),
+            taken: AtomicU64::new(0),
             refused: AtomicBool::new(false),
+            bursts: Mutex::new(VecDeque::new()),
         }))
+    }
+
+    /// mpv took `bytes` between a preview's seek and its frame: the next
+    /// seek's first read is sized by this (and the last few).
+    pub fn learn(&self, bytes: u64) {
+        let mut bursts = self.bursts.lock().unwrap_or_else(PoisonError::into_inner);
+        if bursts.len() == LEARNED_BURSTS {
+            bursts.pop_front();
+        }
+        bursts.push_back(bytes);
+    }
+
+    /// The first read after a seek: [`FIRST_READ`] until previews have shown
+    /// what mpv takes for one, then the median of that and a little more,
+    /// rounded up, so one request usually covers a keyframe.
+    pub fn first_read(&self) -> u64 {
+        let bursts = self.bursts.lock().unwrap_or_else(PoisonError::into_inner);
+        if bursts.is_empty() {
+            return FIRST_READ;
+        }
+        let mut sorted: Vec<u64> = bursts.iter().copied().collect();
+        sorted.sort_unstable();
+        let median = sorted[sorted.len() / 2];
+        (median + median / 8)
+            .div_ceil(READ_GRANULARITY)
+            .saturating_mul(READ_GRANULARITY)
+            .clamp(FIRST_READ, MAX_FIRST_READ)
     }
 
     /// Bytes downloaded by this context's readers so far.
     pub fn bytes_read(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// Bytes mpv has taken from this context's readers so far.
+    pub fn bytes_taken(&self) -> u64 {
+        self.taken.load(Ordering::Relaxed)
     }
 
     /// Whether the host answered a range request with something else.
@@ -143,13 +193,13 @@ impl Reader {
         self.offset == self.buffer_end() && !self.buffer.is_empty()
     }
 
-    /// How much to ask for from `offset`: [`FIRST_READ`] after a seek,
-    /// twice as much as last time when it carries on from the last range.
+    /// How much to ask for from `offset`: a first read after a seek, twice
+    /// as much as last time when it carries on from the last range.
     fn next_len(&self) -> u64 {
         if self.reading_on() {
             (self.last_len * 2).min(MAX_READ)
         } else {
-            FIRST_READ
+            self.context().first_read()
         }
     }
 
@@ -227,6 +277,9 @@ impl Reader {
         let count = out.len().min(self.buffer.len().saturating_sub(from));
         out[..count].copy_from_slice(&self.buffer[from..from + count]);
         self.offset += count as u64;
+        self.context()
+            .taken
+            .fetch_add(count as u64, Ordering::Relaxed);
         Ok(count)
     }
 }
@@ -358,9 +411,10 @@ mod tests {
         assert_eq!(content_range("bytes 0-262143", 0), None);
     }
 
-    fn reader() -> Reader {
+    /// A reader on `context`, which the test keeps alive.
+    fn reader(context: &Arc<ReaderContext>) -> Reader {
         Reader {
-            context: std::ptr::null(),
+            context: Arc::as_ptr(context),
             url: Url::parse("http://127.0.0.1/a.mkv").unwrap(),
             offset: 0,
             size: Some(100 * MAX_READ),
@@ -373,7 +427,8 @@ mod tests {
 
     #[test]
     fn asks_for_more_while_reading_on_and_starts_small_after_a_seek() {
-        let mut reader = reader();
+        let context = ReaderContext::new().unwrap();
+        let mut reader = reader(&context);
         assert_eq!(reader.next_len(), FIRST_READ);
         // Read straight on from a first range: twice as much, up to the cap.
         reader.buffer = vec![0; FIRST_READ as usize];
@@ -391,8 +446,35 @@ mod tests {
     }
 
     #[test]
+    fn learns_how_much_a_preview_downloads() {
+        let context = ReaderContext::new().unwrap();
+        let reader = reader(&context);
+        assert_eq!(context.first_read(), FIRST_READ);
+        // 4K keyframes: about 600 KB each, one of them huge.
+        for bytes in [600, 580, 2800, 610, 590] {
+            context.learn(bytes * 1024);
+        }
+        // The median (600 KB) and an eighth more, rounded up to 64 KB.
+        assert_eq!(context.first_read(), 704 * 1024);
+        assert_eq!(reader.next_len(), 704 * 1024, "after a seek");
+        // Small keyframes never go below the first read; huge ones are capped.
+        let small = ReaderContext::new().unwrap();
+        small.learn(100 * 1024);
+        assert_eq!(small.first_read(), FIRST_READ);
+        let huge = ReaderContext::new().unwrap();
+        huge.learn(3 * 1024 * 1024);
+        assert_eq!(huge.first_read(), MAX_FIRST_READ);
+        // Only the last few count, so a stream that changes is followed.
+        for _ in 0..LEARNED_BURSTS {
+            context.learn(200 * 1024);
+        }
+        assert_eq!(context.first_read(), FIRST_READ);
+    }
+
+    #[test]
     fn serves_reads_from_the_last_range() {
-        let mut reader = reader();
+        let context = ReaderContext::new().unwrap();
+        let mut reader = reader(&context);
         reader.buffer = (0..=255u8).collect();
         reader.buffer_start = 1000;
         reader.offset = 1010;

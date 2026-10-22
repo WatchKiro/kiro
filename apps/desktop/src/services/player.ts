@@ -166,11 +166,12 @@ export type PlayerPreview =
 
 /**
  * What a preview is asked for (`media::mpv::PreviewKind`): the cell under
- * the pointer, one next to it for when the pointer moves on (made only while
- * the player has plenty buffered), or no frame at all, just to get the
- * preview core ready.
+ * the pointer; one next to it for when the pointer moves on, or one of a few
+ * spread over the video to stand in anywhere (both made only while the
+ * player has plenty buffered); or no frame at all, just to get the preview
+ * core ready.
  */
-export type PreviewKind = 'hover' | 'prefetch' | 'warm';
+export type PreviewKind = 'hover' | 'prefetch' | 'storyboard' | 'warm';
 
 /** A frame at `position` seconds for the seek bar. Resolves to `unknown`: check it with `parsePlayerPreview`. */
 export function previewCommand(position: number, kind: PreviewKind = 'hover'): Promise<unknown> {
