@@ -929,7 +929,8 @@ mod tests {
                 "skipIntros": false, "onlineSkipTimes": false,
                 "autoplayNext": true, "upNextSeconds": 10, "seekSeconds": 10, "resume": "always",
                 "rememberVolume": true, "volume": 100, "markWatchedPercent": 90,
-                "keepScreenOn": true, "seekPreviews": true, "audioPassthrough": false, "passthroughFormats": ["ac3", "dts"],
+                "keepScreenOn": true, "seekPreviews": true, "hardwareDecoding": true,
+                "audioPassthrough": false, "passthroughFormats": ["ac3", "dts"],
             },
             "subtitles": {
                 "size": 100, "color": "#ffffff", "edge": "outline", "offset": 0,

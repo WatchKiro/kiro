@@ -199,6 +199,21 @@ export function PlaybackSection() {
           onReset={resetOf('seekPreviews')}
         />
       </Group>
+      <Group title="Troubleshooting">
+        <ToggleSetting
+          id="hardware-decoding"
+          label="Hardware decoding"
+          hint={
+            playback.hardwareDecoding
+              ? 'Video is decoded by the graphics card, which saves power and keeps 4K smooth. Turn this off if video shows green or broken frames, flickers or stutters.'
+              : 'Video is decoded by the processor. It uses more power, and 4K or HEVC video may stutter on slower computers.'
+          }
+          checked={playback.hardwareDecoding}
+          disabled={disabled}
+          onChange={(hardwareDecoding) => void updatePlayback({ hardwareDecoding })}
+          onReset={resetOf('hardwareDecoding')}
+        />
+      </Group>
     </Section>
   );
 }

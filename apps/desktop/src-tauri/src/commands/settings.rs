@@ -34,6 +34,7 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
     if let Some(player) = tauri::Manager::try_state::<crate::commands::player::PlayerState>(app) {
         player.set_keep_screen_on(settings.playback.keep_screen_on);
         player.set_audio_spdif(&settings.playback.audio_spdif());
+        player.set_hwdec(settings.playback.hwdec());
         player.set_presence_options((&settings.general).into());
     }
     #[cfg(not(native_player))]

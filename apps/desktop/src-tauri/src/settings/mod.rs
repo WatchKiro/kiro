@@ -160,6 +160,10 @@ pub struct PlaybackSettings {
     /// none while the player is short of buffered video
     /// (`media::mpv::preview`).
     pub seek_previews: bool,
+    /// Decode video on the graphics card where it can (mpv's
+    /// `hwdec=auto-safe`). Off: decode on the CPU, for a graphics driver that
+    /// shows green or broken frames, flickers or stutters.
+    pub hardware_decoding: bool,
     /// Send [`Self::passthrough_formats`] to an AV receiver untouched
     /// (`crate::media::passthrough`) instead of decoding them.
     pub audio_passthrough: bool,
@@ -185,6 +189,7 @@ impl Default for PlaybackSettings {
             mark_watched_percent: 90,
             keep_screen_on: true,
             seek_previews: true,
+            hardware_decoding: true,
             audio_passthrough: false,
             passthrough_formats: PassthroughFormat::DEFAULTS.to_vec(),
         }
@@ -479,6 +484,15 @@ impl PlaybackSettings {
         passthrough::spdif_codecs(self.audio_passthrough, &self.passthrough_formats)
     }
 
+    /// mpv's `hwdec`: the hardware decoders it judges safe, or none.
+    pub fn hwdec(&self) -> &'static str {
+        if self.hardware_decoding {
+            "auto-safe"
+        } else {
+            "no"
+        }
+    }
+
     /// Watched this fraction of a video: finished. Clamped to
     /// [`WATCHED_PERCENT`] whatever is stored.
     pub fn completed_fraction(&self) -> f64 {
@@ -525,6 +539,7 @@ impl PlaybackSettings {
                 .unwrap_or(defaults.mark_watched_percent),
             keep_screen_on: flag("keepScreenOn", defaults.keep_screen_on),
             seek_previews: flag("seekPreviews", defaults.seek_previews),
+            hardware_decoding: flag("hardwareDecoding", defaults.hardware_decoding),
             audio_passthrough: flag("audioPassthrough", defaults.audio_passthrough),
             passthrough_formats: value
                 .get("passthroughFormats")
@@ -759,6 +774,7 @@ mod tests {
                 online_skip_times: true,
                 keep_screen_on: false,
                 seek_previews: false,
+                hardware_decoding: false,
                 audio_passthrough: true,
                 passthrough_formats: vec![PassthroughFormat::Dts],
             },
@@ -1002,6 +1018,14 @@ mod tests {
     }
 
     #[test]
+    fn hardware_decoding_maps_to_mpvs_hwdec() {
+        let mut playback = PlaybackSettings::default();
+        assert_eq!(playback.hwdec(), "auto-safe");
+        playback.hardware_decoding = false;
+        assert_eq!(playback.hwdec(), "no");
+    }
+
+    #[test]
     fn rejects_invalid_passthrough_formats() {
         use PassthroughFormat::*;
         let store = SettingsStore::new(&temp_dir());
@@ -1218,6 +1242,7 @@ mod tests {
                     "markWatchedPercent": 50,
                     "keepScreenOn": "no",
                     "seekPreviews": 0,
+                    "hardwareDecoding": "auto",
                 },
                 "general": { "discordPresence": "yes", "discordShowTitle": false },
                 "subtitles": { "size": 150, "color": "yellow", "edge": "glow", "offset": 99 },

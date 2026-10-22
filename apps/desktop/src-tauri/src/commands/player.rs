@@ -82,6 +82,14 @@ impl PlayerState {
         }
     }
 
+    /// Applies Settings → Playback → "Hardware decoding" (mpv's `hwdec`) to
+    /// the attached player, if any.
+    pub fn set_hwdec(&self, hwdec: &str) {
+        if let Ok(player) = self.get() {
+            player.set_hwdec(hwdec);
+        }
+    }
+
     /// Applies Settings → General → "Show what I'm watching on Discord" and
     /// its options.
     pub fn set_presence_options(&self, options: PresenceOptions) {
@@ -123,6 +131,14 @@ fn audio_spdif(app: &AppState) -> String {
         .and_then(|settings| settings.get())
         .map(|settings| settings.playback.audio_spdif())
         .unwrap_or_default()
+}
+
+/// Settings → Playback → "Hardware decoding", as mpv's `hwdec` (on if the
+/// settings can't be read).
+fn hwdec(app: &AppState) -> &'static str {
+    app.settings()
+        .and_then(|settings| settings.get())
+        .map_or("auto-safe", |settings| settings.playback.hwdec())
 }
 
 /// Settings → Playback → "Keep the screen on while playing" (on if the
@@ -182,11 +198,13 @@ pub async fn player_attach<R: Runtime>(
     let _guard = state.lifecycle.lock().await;
     let keep_screen_on = keep_screen_on(&app);
     let audio_spdif = audio_spdif(&app);
+    let hwdec = hwdec(&app);
     state.presence.set_options(presence_options(&app));
     if let Ok(player) = state.get() {
         player.set_sink(sink(on_event));
         player.set_keep_screen_on(keep_screen_on);
         player.set_audio_spdif(&audio_spdif);
+        player.set_hwdec(hwdec);
         return logged(
             "player_attach",
             format_args!("reconnect"),
@@ -200,6 +218,7 @@ pub async fn player_attach<R: Runtime>(
     });
     player.set_keep_screen_on(keep_screen_on);
     player.set_audio_spdif(&audio_spdif);
+    player.set_hwdec(hwdec);
     player.set_presence(state.presence.clone());
     let snapshot = logged("player_attach", format_args!("new"), Ok(player.snapshot()))?;
     state.set(Some(player));

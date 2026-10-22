@@ -514,6 +514,23 @@ impl MpvPlayer {
         }
     }
 
+    /// Settings → Playback → "Hardware decoding": mpv's `hwdec`. mpv
+    /// re-creates the video decoder when it changes, so an unchanged choice
+    /// changes nothing (settings are saved mid-playback, e.g. the volume).
+    pub fn set_hwdec(&self, hwdec: &str) {
+        let current = self.mpv.get_property::<String>("hwdec");
+        if current.as_deref().is_ok_and(|current| current == hwdec) {
+            return;
+        }
+        let result = self.mpv.set_property("hwdec", hwdec);
+        if debug_log_enabled() {
+            match result {
+                Ok(()) => player_log!("[kiro-player] hardware decoding: hwdec = {hwdec}"),
+                Err(error) => player_log!("[kiro-player] hardware decoding failed: {error:?}"),
+            }
+        }
+    }
+
     /// Reports this player's state changes to Discord Rich Presence.
     pub fn set_presence(&self, presence: Arc<Presence>) {
         *self

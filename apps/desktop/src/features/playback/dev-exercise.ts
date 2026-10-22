@@ -34,6 +34,11 @@
  * (detach), a few seconds apart, for watching `pmset -g assertions` (the Rust
  * log shows each `keep awake` change).
  *
+ * `VITE_KIRO_SPIKE_EXERCISE=hwdec` plays, turns Settings → Playback →
+ * "Hardware decoding" off and on again, then leaves, a few seconds apart.
+ * The Rust log shows each `hardware decoding` change, and the stats every
+ * 2 s say which decoder is in use (`hwdec`).
+ *
  * `VITE_KIRO_SPIKE_EXERCISE=passthrough` (with `VITE_KIRO_SPIKE_AUTOPLAY` set
  * to a file whose audio tracks are AC-3, E-AC-3, DTS and TrueHD, in that
  * order) turns Settings → Playback → "Audio passthrough" on with every
@@ -163,6 +168,18 @@ export async function runDevExercise(
     await sleep(8000);
     await keepScreenOn(true);
     await sleep(8000);
+    void navigate('/');
+    return;
+  }
+  if (MODE === 'hwdec') {
+    const hardwareDecoding = (on: boolean) =>
+      settingsStore.getState().updatePlayback({ hardwareDecoding: on });
+    await waitForState(player, 'playing');
+    await sleep(6000);
+    await hardwareDecoding(false);
+    await sleep(6000);
+    await hardwareDecoding(true);
+    await sleep(6000);
     void navigate('/');
     return;
   }

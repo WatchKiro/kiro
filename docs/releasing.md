@@ -226,7 +226,7 @@ pkg-config only sees the build's own prefix and an allowed list of system packag
 
 ### Hardware decoding
 
-mpv runs with `hwdec=auto-safe`. The video surface passes GDK's display to mpv's render context (`MPV_RENDER_PARAM_WL_DISPLAY` or `MPV_RENDER_PARAM_X11_DISPLAY`, `src-tauri/src/media/mpv/linux.rs`):
+mpv runs with `hwdec=auto-safe` unless Settings → Playback → Hardware decoding is off ([playback](playback.md#hardware-decoding)). The video surface passes GDK's display to mpv's render context (`MPV_RENDER_PARAM_WL_DISPLAY` or `MPV_RENDER_PARAM_X11_DISPLAY`, `src-tauri/src/media/mpv/linux.rs`):
 
 - **Wayland:** mpv opens VA-API on the compositor connection and imports decoded frames into the GL area's EGL context as dmabufs: zero-copy `vaapi`.
 - **X11:** GTK 3 draws GL areas with GLX, which can't import dmabufs, and the LGPL build has no X11 VA-API display (mpv's X11 code is GPL). mpv uses `vaapi-copy` instead, through the DRM render node (`/dev/dri/renderD128`): still hardware decoding, with a copy back to system memory.

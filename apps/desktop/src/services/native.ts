@@ -269,6 +269,11 @@ export interface PlaybackSettings {
    * of buffered video.
    */
   seekPreviews: boolean;
+  /**
+   * Decode video on the graphics card where it can (mpv's `hwdec=auto-safe`).
+   * Off: on the CPU, for a graphics driver that shows broken frames or stutters.
+   */
+  hardwareDecoding: boolean;
   /** Send `passthroughFormats` to an AV receiver untouched instead of decoding them. */
   audioPassthrough: boolean;
   /** Distinct, each available on this platform, DTS-HD only with DTS. */
