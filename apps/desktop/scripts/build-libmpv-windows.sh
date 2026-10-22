@@ -304,6 +304,7 @@ build_ffmpeg() {
       --disable-encoders --disable-muxers --disable-indevs --disable-outdevs \
       --enable-indev=lavfi \
       --enable-muxer=spdif \
+      --enable-encoder=mjpeg \
       --disable-filter=gfxcapture,ddagrab \
       --enable-w32threads \
       --enable-zlib --enable-iconv \
@@ -403,6 +404,10 @@ verify() {
   # receiver with FFmpeg's spdif muxer, the only muxer the build keeps.
   grep -q '^#define CONFIG_SPDIF_MUXER 1' "$SRC/ffmpeg/config_components.h" \
     || { echo "verify: FFmpeg was built without the spdif muxer (audio passthrough)" >&2; exit 1; }
+  # Seek-bar previews are JPEGs written by mpv through FFmpeg's mjpeg encoder,
+  # the only encoder the build keeps (mpv is built without libjpeg).
+  grep -q '^#define CONFIG_MJPEG_ENCODER 1' "$SRC/ffmpeg/config_components.h" \
+    || { echo "verify: FFmpeg was built without the mjpeg encoder (seek-bar previews)" >&2; exit 1; }
   grep -q '^#define HAVE_D3D11 1' "$config" || { echo "verify: mpv was built without D3D11" >&2; exit 1; }
   grep -q '^#define CONFIG_D3D11VA 1' "$SRC/ffmpeg/config.h" \
     || { echo "verify: FFmpeg was built without d3d11va" >&2; exit 1; }

@@ -117,13 +117,13 @@ Requirements: Xcode, Node 24 and pnpm, Rust, and `brew install meson ninja pkg-c
 `apps/desktop/scripts/build-libmpv.sh` downloads pinned source releases, verifies their SHA-256 checksums (the same ones Homebrew verifies), and builds:
 
 - **mpv 0.41.0** with `-Dgpl=false`, as a library only (no `mpv` player). Lua, JavaScript, Vulkan, Blu-ray, DVD, CD audio and other optional features are off. Cocoa, OpenGL, VideoToolbox interop and both audio outputs (Core Audio, and AVFoundation as the fallback when Core Audio can't open the output device) are on: the same playback path as development.
-- **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect` so nothing optional is picked up from the build machine. HTTPS uses macOS's TLS (Secure Transport), so there is no OpenSSL. Hardware decoding uses VideoToolbox. AV1 is decoded by dav1d, since M1 and M2 have no AV1 hardware. Encoders, muxers and devices are left out, except the lavfi input and the **`spdif` muxer**, which mpv's audio passthrough needs to pack Dolby and DTS soundtracks for a receiver ([playback](playback.md#audio-passthrough)).
+- **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect` so nothing optional is picked up from the build machine. HTTPS uses macOS's TLS (Secure Transport), so there is no OpenSSL. Hardware decoding uses VideoToolbox. AV1 is decoded by dav1d, since M1 and M2 have no AV1 hardware. Encoders, muxers and devices are left out, except the lavfi input, the **`spdif` muxer**, which mpv's audio passthrough needs to pack Dolby and DTS soundtracks for a receiver ([playback](playback.md#audio-passthrough)), and the **`mjpeg` encoder**, which mpv's `screenshot-to-file` uses for seek-bar previews ([playback](playback.md#seek-bar-previews)).
 - **Dependencies**, statically: libplacebo, libass (Core Text font provider, no fontconfig), FreeType, FriBidi, HarfBuzz and dav1d.
 
 pkg-config only sees the build's own prefix, never Homebrew, and everything targets macOS 12 (`minimumSystemVersion`). The script fails unless:
 
 - mpv's `HAVE_GPL` is 0, and both audio outputs (Core Audio, which includes `coreaudio_exclusive`, and AVFoundation) are built in;
-- FFmpeg reports "LGPL version 2.1 or later", and has the `spdif` muxer (`CONFIG_SPDIF_MUXER` 1);
+- FFmpeg reports "LGPL version 2.1 or later", and has the `spdif` muxer (`CONFIG_SPDIF_MUXER` 1) and the `mjpeg` encoder (`CONFIG_MJPEG_ENCODER` 1);
 - `libmpv.2.dylib` links nothing outside `/usr/lib` and `/System/Library`.
 
 Build it from a neutral folder ([Build paths](#build-paths)): FFmpeg and mpv record the folder they were built in.
@@ -212,13 +212,13 @@ The AppImage is self-contained except for what every desktop provides and must c
 `apps/desktop/scripts/build-libmpv-linux.sh` mirrors the macOS script: pinned source releases with verified SHA-256 checksums (the same versions of mpv, FFmpeg, libplacebo, libass, FreeType, FriBidi, HarfBuzz and dav1d as macOS; keep them in step), built into one `libmpv.so.2`:
 
 - **mpv 0.41.0** with `-Dgpl=false` and `-Dauto_features=disabled`, then only what Kiro uses: the OpenGL render API (`plain-gl`, EGL), VA-API (DRM and Wayland displays, dmabuf interop), Wayland, DRM, PulseAudio and ALSA. `gpl=false` also drops all of mpv's X11 code, including its X11 window output, which Kiro doesn't use (it renders into a `GtkGLArea`).
-- **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect`, and with VA-API and libdrm. HTTPS uses a static **OpenSSL 3.5** (Apache-2.0, which FFmpeg allows in LGPL builds). As on macOS, the only muxer is `spdif`, for audio passthrough.
+- **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect`, and with VA-API and libdrm. HTTPS uses a static **OpenSSL 3.5** (Apache-2.0, which FFmpeg allows in LGPL builds). As on macOS, the only muxer is `spdif`, for audio passthrough, and the only encoder `mjpeg`, for seek-bar previews.
 - **Dependencies**, statically: libplacebo, libass with **fontconfig** (and expat) for system fonts, FreeType, FriBidi, HarfBuzz, dav1d, OpenSSL, zlib and libdisplay-info (for mpv's DRM support, with an empty monitor-name table rather than hwdata's GPL-or-X11 one). Linked with `--exclude-libs,ALL`, so their symbols stay inside libmpv and can't clash with the copies GTK and WebKitGTK load.
 - **Build-time only:** Wayland 1.21 (headers and `wayland-scanner`; its generated protocol code is compiled in) and wayland-protocols.
 
 pkg-config only sees the build's own prefix and an allowed list of system packages. The script fails unless:
 
-- mpv's `HAVE_GPL` is 0 and FFmpeg reports "LGPL version 2.1 or later", with the `spdif` muxer;
+- mpv's `HAVE_GPL` is 0 and FFmpeg reports "LGPL version 2.1 or later", with the `spdif` muxer and the `mjpeg` encoder;
 - VA-API (DRM and Wayland), dmabuf GL interop, EGL, Wayland, PulseAudio and ALSA are all built in;
 - `libmpv.so.2` links nothing but `SYSTEM_LIBS`: glibc, libstdc++ and libgcc_s, `libEGL.so.1`, `libva.so.2`, `libva-drm.so.2`, `libva-wayland.so.2`, `libdrm.so.2`, `libwayland-client.so.0`, `libwayland-cursor.so.0`, `libxkbcommon.so.0`, `libpulse.so.0` and `libasound.so.2`;
 - it exports nothing but mpv's API (`mpv_*`);
@@ -300,7 +300,7 @@ The release overlay is `src-tauri/tauri.windows-release.conf.json`: the DLL and 
 `build-libmpv-windows.sh` is the Windows twin of `build-libmpv.sh`. It downloads pinned source releases, verifies their SHA-256 checksums, and cross-compiles them for x86_64 Windows with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (clang, lld, libc++ and the mingw-w64 runtime targeting the Universal C Runtime), itself a pinned, checksum-verified download.
 
 - **mpv 0.41.0** with `-Dgpl=false`, as a library only. Video output is Direct3D 11 (`vo=gpu-next`), hardware decoding is D3D11VA (and DXVA2), and audio is WASAPI. OpenGL, Vulkan, Lua, JavaScript, Blu-ray, DVD and media keys (SMTC) are off.
-- **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect`. HTTPS uses Windows' own TLS (Schannel), so there is no OpenSSL. Hardware decoding uses D3D11VA and DXVA2; AV1 without hardware support is decoded by dav1d. As on macOS, the only muxer is `spdif`, for audio passthrough (WASAPI exclusive mode).
+- **FFmpeg 9.0.2** without `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, with `--disable-autodetect`. HTTPS uses Windows' own TLS (Schannel), so there is no OpenSSL. Hardware decoding uses D3D11VA and DXVA2; AV1 without hardware support is decoded by dav1d. As on macOS, the only muxer is `spdif`, for audio passthrough (WASAPI exclusive mode), and the only encoder `mjpeg`, for seek-bar previews.
 - **Dependencies**, statically: libplacebo, libass (DirectWrite font provider), FreeType, FriBidi, HarfBuzz, dav1d, shaderc (with glslang and SPIRV-Tools) and SPIRV-Cross, which mpv's and libplacebo's Direct3D 11 renderers use to translate shaders to HLSL, plus libiconv (subtitle character sets) and zlib, which macOS provides but Windows doesn't. The C++ runtime (libc++) is linked in too.
 
 The versions shared with macOS are the same releases. The script fails unless:

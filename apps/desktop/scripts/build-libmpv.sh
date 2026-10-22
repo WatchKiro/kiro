@@ -162,6 +162,7 @@ build_ffmpeg() {
       --disable-encoders --disable-muxers --disable-indevs --disable-outdevs \
       --enable-indev=lavfi \
       --enable-muxer=spdif \
+      --enable-encoder=mjpeg \
       --enable-zlib --enable-bzlib --enable-iconv \
       --enable-videotoolbox --enable-audiotoolbox --enable-securetransport \
       --enable-libdav1d
@@ -257,6 +258,10 @@ verify() {
   # receiver with FFmpeg's spdif muxer, the only muxer the build keeps.
   grep -q '^#define CONFIG_SPDIF_MUXER 1' "$SRC/ffmpeg/config_components.h" \
     || { echo "verify: FFmpeg was built without the spdif muxer (audio passthrough)" >&2; exit 1; }
+  # Seek-bar previews are JPEGs written by mpv through FFmpeg's mjpeg encoder,
+  # the only encoder the build keeps (mpv is built without libjpeg).
+  grep -q '^#define CONFIG_MJPEG_ENCODER 1' "$SRC/ffmpeg/config_components.h" \
+    || { echo "verify: FFmpeg was built without the mjpeg encoder (seek-bar previews)" >&2; exit 1; }
   if otool -L "$dylib" | tail -n +2 | grep -Ev '^\s+(/usr/lib/|/System/Library/|@rpath/libmpv)'; then
     echo "verify: libmpv links libraries outside macOS (listed above)" >&2
     exit 1

@@ -296,6 +296,7 @@ build_ffmpeg() {
       --disable-encoders --disable-muxers --disable-indevs --disable-outdevs \
       --enable-indev=lavfi \
       --enable-muxer=spdif \
+      --enable-encoder=mjpeg \
       --enable-zlib --enable-iconv --enable-openssl \
       --enable-vaapi --enable-libdrm \
       --enable-libdav1d
@@ -419,6 +420,10 @@ verify() {
   # receiver with FFmpeg's spdif muxer, the only muxer the build keeps.
   grep -q '^#define CONFIG_SPDIF_MUXER 1' "$SRC/ffmpeg/config_components.h" \
     || { echo "verify: FFmpeg was built without the spdif muxer (audio passthrough)" >&2; exit 1; }
+  # Seek-bar previews are JPEGs written by mpv through FFmpeg's mjpeg encoder,
+  # the only encoder the build keeps (mpv is built without libjpeg).
+  grep -q '^#define CONFIG_MJPEG_ENCODER 1' "$SRC/ffmpeg/config_components.h" \
+    || { echo "verify: FFmpeg was built without the mjpeg encoder (seek-bar previews)" >&2; exit 1; }
   for feature in VAAPI VAAPI_DRM VAAPI_WAYLAND DMABUF_INTEROP_GL GL EGL WAYLAND PULSE ALSA; do
     grep -q "^#define HAVE_$feature 1" "$config" \
       || { echo "verify: mpv was built without $feature" >&2; exit 1; }
