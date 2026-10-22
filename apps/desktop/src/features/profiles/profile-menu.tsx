@@ -162,7 +162,7 @@ export function ProfileMenu({ collapsed }: { collapsed: boolean }) {
             className={item}
             onClick={() => {
               setOpen(false);
-              void navigate('/settings#profiles');
+              void navigate('/settings/profiles');
             }}
           >
             <Settings2 aria-hidden className="size-[18px] text-ink-400" />

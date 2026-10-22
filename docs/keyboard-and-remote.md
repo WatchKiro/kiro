@@ -48,7 +48,7 @@ The rules for choosing the next item follow Android's FocusFinder: only items wh
 - **Rows remember.** Entering a group (a row, a grid, the sidebar, a set of tabs) lands on the item last focused in it, else its current item (`aria-current`, `aria-selected`, `aria-checked`), else the nearest one in line.
 - **Rows end.** Left and Right stay in a row and stop at its end, rather than dropping into the next row. Left at a row's start reaches the sidebar.
 - **The header comes last.** The floating header is only reached when nothing else lies that way, so Up from the first row reaches the hero first.
-- **The sidebar is beside the page.** Left and Right enter and leave it; Up and Down stay inside it.
+- **The sidebar is beside the page.** Left and Right enter and leave it; Up and Down stay inside it. Settings' list of sections is a side column too: from a setting, Left reaches it (on the current section) before the sidebar, and Right from it lands at the top of the section, or where it was left.
 - **Scrolling** brings the focused item into view smoothly (instantly with reduced motion), clear of the header, and keeps a row from snapping a card half out of view.
 - **Back restores focus**: going back to a page focuses the item that was focused there. Opening a page with the keys focuses its main action (Play on Discover and on a title).
 - **At an edge** nothing moves and the key does what it normally does, such as scrolling the rest of a page into view.
@@ -78,6 +78,7 @@ Plain focusable elements need nothing. Data attributes steer the rest:
 | `data-nav-skip`                       | Arrows pass this element (or everything inside it) by; Tab still reaches it                           |
 | `data-nav-fallback`                   | Reached only when nothing else lies that way (the header)                                             |
 | `data-nav-side`                       | A side column (the sidebar), entered with Left and Right only                                         |
+| `data-nav-entry`                      | A region beside a side column: entered from it on the item last focused there, else its first         |
 
 Pages that handle keys themselves should skip events that are already `defaultPrevented`: the navigation runs first and marks the keys it used.
 

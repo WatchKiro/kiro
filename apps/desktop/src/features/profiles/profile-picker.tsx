@@ -145,7 +145,7 @@ export function ProfilePicker() {
                   variant="secondary"
                   onClick={() => {
                     closePicker();
-                    void navigate('/settings#profiles');
+                    void navigate('/settings/profiles');
                   }}
                 >
                   <Settings2 aria-hidden className="size-4" />

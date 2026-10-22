@@ -1,13 +1,26 @@
 /**
- * The building blocks of the Settings page: a section card, a labelled row
- * with its hint and reset, and the controls that go in a row.
+ * The building blocks of the Settings page: a section, the groups in it, a
+ * labelled row with its hint and reset, and the controls that go in a row.
  */
 import { cx } from '@kiro/utils';
-import { RotateCcw } from 'lucide-react';
-import { useId, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { ChevronRight, RotateCcw } from 'lucide-react';
+import {
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 
+import { settingElementId } from '@/features/settings/settings-sections';
+
+/**
+ * One section of Settings, shown on its own (`/settings/playback`): its
+ * heading, a line about it and a reset for the whole section, then its
+ * {@link Group}s.
+ */
 export function Section({
-  id,
   title,
   description,
   onReset,
@@ -15,8 +28,6 @@ export function Section({
   resetDisabled,
   children,
 }: {
-  /** The anchor other pages link to, e.g. `/settings#streams`. */
-  id?: string;
   title: string;
   description?: string;
   /** Puts the whole section back to its defaults. */
@@ -28,52 +39,133 @@ export function Section({
 }) {
   const headingId = useId();
   return (
-    <section
-      id={id}
-      aria-labelledby={headingId}
-      className="scroll-mt-24 overflow-hidden rounded-card border border-white/[0.07] bg-white/[0.025]"
-    >
-      <div className="flex items-start gap-4 border-b border-white/[0.06] px-5 py-4">
+    <section aria-labelledby={headingId}>
+      <div className="mb-6 flex items-start gap-4">
         <div className="min-w-0 flex-1">
-          <h2 id={headingId} className="text-[15px] font-semibold text-ink-50">
+          <h2 id={headingId} className="text-xl font-semibold tracking-[-0.01em] text-ink-50">
             {title}
           </h2>
-          {description && <p className="mt-0.5 text-[13px] text-ink-400">{description}</p>}
+          {description && (
+            <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-ink-400">{description}</p>
+          )}
         </div>
         {onReset && (
           <button
             type="button"
             onClick={onReset}
             disabled={resetDisabled}
-            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium text-ink-300 transition-colors hover:bg-white/[0.06] hover:text-ink-50 focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+            // Coming into the section, focus starts on its first setting.
+            data-nav-forget
+            className="mt-0.5 flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-ink-200 transition-colors hover:bg-white/[0.06] hover:text-ink-50 focus-visible:focus-ring disabled:cursor-not-allowed disabled:border-transparent disabled:text-ink-500 disabled:hover:bg-transparent"
           >
             <RotateCcw aria-hidden className="size-3.5" />
             {resetLabel}
           </button>
         )}
       </div>
-      {children}
+      <div className="space-y-8">{children}</div>
     </section>
   );
 }
 
 /**
- * A setting: its label and hint on the left, the control on the right, and,
- * once changed from the default, a button that puts it back.
+ * Settings that belong together within a section, under a small heading, in
+ * one card. Rows are divided by hairlines.
+ */
+export function Group({
+  title,
+  description,
+  aside,
+  children,
+}: {
+  title: string;
+  /** A line under the heading, about all of the group. */
+  description?: ReactNode;
+  /** Beside the heading, e.g. a link to a related page. */
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+  return (
+    <section aria-labelledby={headingId}>
+      <div className="mb-2 flex items-end gap-4 px-1">
+        <div className="min-w-0 flex-1">
+          <h3
+            id={headingId}
+            className="text-xs font-semibold tracking-[0.08em] text-ink-400 uppercase"
+          >
+            {title}
+          </h3>
+          {description && <p className="mt-1 text-xs text-ink-500">{description}</p>}
+        </div>
+        {aside}
+      </div>
+      <div className="divide-y divide-white/[0.05] overflow-hidden rounded-card border border-white/[0.07] bg-white/[0.025]">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Less-used settings in a group, folded away until asked for. Open from the
+ * start when one of them has been changed, so nothing set is out of sight;
+ * a link to a setting inside opens it (see `useSettingAnchor`).
+ */
+export function Disclosure({
+  label,
+  summary,
+  defaultOpen,
+  children,
+}: {
+  label: string;
+  /** What's inside, shown beside the label, e.g. `File size, codecs, keywords`. */
+  summary?: string;
+  defaultOpen: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className="group">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 text-sm font-medium text-ink-200 transition-colors hover:bg-white/[0.03] hover:text-ink-50 focus-visible:focus-ring focus-visible:-outline-offset-2 [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          aria-hidden
+          className="size-4 text-ink-400 transition-transform group-open:rotate-90"
+        />
+        {label}
+        {summary && !open && (
+          <span className="truncate text-xs font-normal text-ink-500">{summary}</span>
+        )}
+      </summary>
+      <div className="divide-y divide-white/[0.05] border-t border-white/[0.05]">{children}</div>
+    </details>
+  );
+}
+
+/**
+ * A setting: its label and hint on the left, the control on the right (or
+ * below, `stacked`, for lists and wide controls), and, once changed from the
+ * default, a button that puts it back.
  */
 export function SettingRow({
+  id,
   label,
   hint,
   labelId,
   disabled,
+  stacked,
   onReset,
   children,
 }: {
+  /** Its anchor, for links and search (`/settings/playback#resume`). */
+  id?: string;
   label: string;
   hint: ReactNode;
   /** Labels the control (`aria-labelledby`). */
   labelId: string;
   disabled?: boolean;
+  /** The control goes under the label, full width. */
+  stacked?: boolean;
   /** Present while the value differs from its default. */
   onReset?: (() => void) | undefined;
   children: ReactNode;
@@ -81,13 +173,17 @@ export function SettingRow({
   const hintId = `${labelId}-hint`;
   return (
     <div
+      id={id === undefined ? undefined : settingElementId(id)}
       role="group"
       aria-labelledby={labelId}
       aria-describedby={hintId}
-      className={cx('flex flex-wrap gap-x-8 gap-y-3 px-5 py-4', disabled && 'opacity-60')}
+      className={cx(
+        'flex scroll-mt-28 gap-x-8 gap-y-3 px-5 py-4 transition-colors duration-700 data-highlight:bg-accent/[0.12] data-highlight:duration-150',
+        stacked ? 'flex-col' : 'flex-wrap items-center',
+      )}
     >
-      <div className="w-56 shrink-0">
-        <div className="flex h-5 items-center gap-1">
+      <div className={cx('min-w-0', !stacked && 'flex-1 basis-64', disabled && 'opacity-60')}>
+        <div className="flex min-h-5 items-start gap-1">
           <p id={labelId} className="text-sm font-medium text-ink-100">
             {label}
           </p>
@@ -98,22 +194,32 @@ export function SettingRow({
               disabled={disabled}
               aria-label={`Reset ${label.toLowerCase()} to its default`}
               title="Reset to default"
-              className="flex size-5 cursor-pointer items-center justify-center rounded-full text-ink-500 transition-colors hover:bg-white/10 hover:text-ink-50 focus-visible:focus-ring disabled:cursor-not-allowed"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full text-ink-500 transition-colors hover:bg-white/10 hover:text-ink-50 focus-visible:focus-ring disabled:cursor-not-allowed"
             >
               <RotateCcw aria-hidden className="size-3" />
             </button>
           )}
         </div>
-        <p id={hintId} className="mt-0.5 text-xs leading-relaxed text-ink-400">
+        <p id={hintId} className="mt-0.5 max-w-prose text-xs leading-relaxed text-ink-400">
           {hint}
         </p>
       </div>
-      <div className="flex min-w-60 flex-1 items-center">{children}</div>
+      <div
+        data-setting-control
+        className={cx(
+          'flex min-w-0 items-center',
+          stacked ? 'w-full' : 'ml-auto shrink-0 justify-end',
+          disabled && 'opacity-60',
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }
 
 export function ToggleSetting({
+  id,
   label,
   hint,
   checked,
@@ -121,6 +227,7 @@ export function ToggleSetting({
   onChange,
   onReset,
 }: {
+  id?: string;
   label: string;
   hint: ReactNode;
   checked: boolean;
@@ -130,7 +237,14 @@ export function ToggleSetting({
 }) {
   const labelId = useId();
   return (
-    <SettingRow label={label} hint={hint} labelId={labelId} disabled={disabled} onReset={onReset}>
+    <SettingRow
+      id={id}
+      label={label}
+      hint={hint}
+      labelId={labelId}
+      disabled={disabled}
+      onReset={onReset}
+    >
       <Switch labelledBy={labelId} checked={checked} disabled={disabled} onChange={onChange} />
     </SettingRow>
   );
@@ -271,7 +385,7 @@ export function Slider({
 }) {
   const fill = ((value - min) / (max - min)) * 100;
   return (
-    <div className="flex w-full max-w-80 items-center gap-3">
+    <div className="flex w-72 max-w-full items-center gap-3">
       <input
         type="range"
         aria-labelledby={labelledBy}

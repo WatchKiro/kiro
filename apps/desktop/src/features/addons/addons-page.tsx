@@ -39,7 +39,7 @@ export function AddonsPage() {
             {status === 'ready' && addons.length > 0 && missingDefaults > 0 && <RestoreDefaults />}
             {status === 'ready' && addons.length > 0 && (
               <Link
-                to="/settings#addons"
+                to="/settings/addons"
                 className="rounded text-[13px] text-accent-strong hover:underline focus-visible:focus-ring"
               >
                 Order and turn off

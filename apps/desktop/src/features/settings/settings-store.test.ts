@@ -118,6 +118,23 @@ describe('settings store', () => {
     assert.deepEqual(calls.set[0], JAPANESE);
   });
 
+  it('resets some fields of several sections in one save', async () => {
+    const { backend, calls } = fakeBackend({
+      ...JAPANESE,
+      subtitles: { ...DEFAULT_SETTINGS.subtitles, size: 150 },
+    });
+    const store = createSettingsStore(backend);
+    await store.getState().load();
+    await store
+      .getState()
+      .resetFields({ playback: ['subtitleLanguages'], subtitles: ['size', 'color'] });
+    assert.equal(calls.set.length, 1);
+    assert.deepEqual(calls.set[0], {
+      ...JAPANESE,
+      playback: { ...JAPANESE.playback, subtitleLanguages: [] },
+    });
+  });
+
   it('puts back the previous settings when a save is refused', async () => {
     const store = createSettingsStore({
       get: () => Promise.resolve(JAPANESE),

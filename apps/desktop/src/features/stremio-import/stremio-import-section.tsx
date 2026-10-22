@@ -13,7 +13,8 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { Link } from 'react-router';
 
 import { addonsStore } from '@/features/addons/addons-store';
-import { Section, Segmented } from '@/features/settings/settings-controls';
+import { Group, Section, Segmented } from '@/features/settings/settings-controls';
+import { settingElementId, settingsSection } from '@/features/settings/settings-sections';
 import {
   addonCounts,
   addonTotals,
@@ -53,6 +54,8 @@ function discard() {
   void stremioCommands.discard().catch(() => {});
 }
 
+const SECTION = settingsSection('import');
+
 export function StremioImportSection() {
   const [step, setStep] = useState<Step>({ kind: 'signIn', error: null });
   const stepRef = useRef(step);
@@ -74,53 +77,51 @@ export function StremioImportSection() {
   const restart = () => setStep({ kind: 'signIn', error: null });
 
   return (
-    <Section
-      id="stremio"
-      title="Import from Stremio"
-      description="Bring your addons, library and watch progress over from your Stremio account in one go."
-    >
-      <div className="px-5 py-4">
-        {step.kind === 'signIn' && (
-          <SignInStep
-            error={step.error}
-            onSubmit={(signIn) => {
-              setStep({ kind: 'reading' });
-              stremioCommands.fetch(signIn).then(
-                (preview) => {
-                  if (mounted.current) setStep({ kind: 'preview', preview });
-                  else discard();
-                },
-                (error: unknown) => setStep({ kind: 'signIn', error: describeError(error) }),
-              );
-            }}
-          />
-        )}
-        {step.kind === 'reading' && <Busy label="Reading your Stremio account…" />}
-        {step.kind === 'preview' && (
-          <PreviewStep
-            preview={step.preview}
-            onCancel={() => {
-              discard();
-              restart();
-            }}
-            onImport={(choice) => {
-              setStep({ kind: 'importing', stage: null });
-              // Addons install into a loaded list, after what's there.
-              void addonsStore
-                .getState()
-                .load()
-                .then(() =>
-                  runImport(step.preview, choice, backend, (stage) =>
-                    setStep({ kind: 'importing', stage }),
-                  ),
-                )
-                .then((report) => setStep({ kind: 'done', report }));
-            }}
-          />
-        )}
-        {step.kind === 'importing' && <ImportingStep stage={step.stage} />}
-        {step.kind === 'done' && <DoneStep report={step.report} onDone={restart} />}
-      </div>
+    <Section title={SECTION.title} description={SECTION.description}>
+      <Group title="Stremio">
+        <div id={settingElementId('stremio')} className="px-5 py-4">
+          {step.kind === 'signIn' && (
+            <SignInStep
+              error={step.error}
+              onSubmit={(signIn) => {
+                setStep({ kind: 'reading' });
+                stremioCommands.fetch(signIn).then(
+                  (preview) => {
+                    if (mounted.current) setStep({ kind: 'preview', preview });
+                    else discard();
+                  },
+                  (error: unknown) => setStep({ kind: 'signIn', error: describeError(error) }),
+                );
+              }}
+            />
+          )}
+          {step.kind === 'reading' && <Busy label="Reading your Stremio account…" />}
+          {step.kind === 'preview' && (
+            <PreviewStep
+              preview={step.preview}
+              onCancel={() => {
+                discard();
+                restart();
+              }}
+              onImport={(choice) => {
+                setStep({ kind: 'importing', stage: null });
+                // Addons install into a loaded list, after what's there.
+                void addonsStore
+                  .getState()
+                  .load()
+                  .then(() =>
+                    runImport(step.preview, choice, backend, (stage) =>
+                      setStep({ kind: 'importing', stage }),
+                    ),
+                  )
+                  .then((report) => setStep({ kind: 'done', report }));
+              }}
+            />
+          )}
+          {step.kind === 'importing' && <ImportingStep stage={step.stage} />}
+          {step.kind === 'done' && <DoneStep report={step.report} onDone={restart} />}
+        </div>
+      </Group>
     </Section>
   );
 }

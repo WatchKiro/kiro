@@ -462,6 +462,54 @@ export function isChanged(settings: Settings, section: SettingsSection): boolean
   return JSON.stringify(settings[section]) !== JSON.stringify(DEFAULT_SETTINGS[section]);
 }
 
+/**
+ * Some fields of some sections, e.g. the playback settings that Settings →
+ * Audio shows. A page of Settings can show fields from more than one section.
+ */
+export type SettingsFields = {
+  [S in SettingsSection]?: readonly (keyof Settings[S])[];
+};
+
+/** `settings` with `fields` back at their defaults, and everything else as it was. */
+export function withDefaultFields(settings: Settings, fields: SettingsFields): Settings {
+  const reset = <S extends SettingsSection>(
+    next: Settings,
+    section: S,
+    keys: readonly (keyof Settings[S])[] = [],
+  ): Settings => {
+    if (keys.length === 0) return next;
+    const values = { ...next[section] };
+    for (const key of keys) values[key] = DEFAULT_SETTINGS[section][key];
+    return { ...next, [section]: values };
+  };
+  let next = settings;
+  next = reset(next, 'general', fields.general);
+  next = reset(next, 'playback', fields.playback);
+  next = reset(next, 'subtitles', fields.subtitles);
+  next = reset(next, 'streams', fields.streams);
+  next = reset(next, 'rows', fields.rows);
+  return next;
+}
+
+/** Whether any of `fields` differs from its default. */
+export function areFieldsChanged(settings: Settings, fields: SettingsFields): boolean {
+  const changed = <S extends SettingsSection>(
+    section: S,
+    keys: readonly (keyof Settings[S])[] = [],
+  ): boolean =>
+    keys.some(
+      (key) =>
+        JSON.stringify(settings[section][key]) !== JSON.stringify(DEFAULT_SETTINGS[section][key]),
+    );
+  return (
+    changed('general', fields.general) ||
+    changed('playback', fields.playback) ||
+    changed('subtitles', fields.subtitles) ||
+    changed('streams', fields.streams) ||
+    changed('rows', fields.rows)
+  );
+}
+
 /** A row's reset action: only while `value` differs from its default. */
 export function resetTo<T>(value: T, fallback: T, reset: () => void): (() => void) | undefined {
   return JSON.stringify(value) === JSON.stringify(fallback) ? undefined : reset;

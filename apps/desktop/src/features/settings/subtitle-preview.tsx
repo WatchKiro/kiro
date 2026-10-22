@@ -10,7 +10,7 @@ const HEIGHT = 216;
  */
 export function SubtitlePreview({ subtitles }: { subtitles: SubtitleSettings }) {
   return (
-    <figure className="px-5 pt-4">
+    <figure className="px-5 py-4">
       <div
         style={{ height: HEIGHT }}
         className="relative overflow-hidden rounded-xl bg-[linear-gradient(180deg,#9cc3e4_0%,#e9dcc2_48%,#c9a77a_62%,#5c4a36_100%)] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]"

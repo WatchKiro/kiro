@@ -16,6 +16,9 @@ import { FocusMemory, chooseMove, type Direction, type NavItem } from '@/feature
  * - `data-nav-group` on a row, grid or the sidebar: returning to it lands on
  *   the item last focused there (or its current item, `aria-current` and the
  *   like, the first time).
+ * - `data-nav-entry` on a region beside a side column (a section of
+ *   Settings): coming from the column, focus lands on the item last focused
+ *   in it, else its first, rather than the nearest.
  * - `data-nav-forget` on an item a group shouldn't return to, such as a
  *   row's "See all" above its posters.
  * - `data-nav-start` on the item focus starts from on a page, such as Play.
@@ -158,6 +161,13 @@ function currentFocus(scope: Element): HTMLElement | undefined {
   return active;
 }
 
+/** How far a side column lies from `from`, sideways in `direction`. */
+function columnGap(from: Element, column: Element, direction: Direction): number {
+  const a = from.getBoundingClientRect();
+  const b = column.getBoundingClientRect();
+  return direction === 'left' ? a.left - b.right : b.left - a.right;
+}
+
 /** Moves focus `direction`. Returns whether it did. */
 function move(direction: Direction): boolean {
   const scope = topLayer() ?? document.body;
@@ -190,14 +200,43 @@ function move(direction: Direction): boolean {
     });
   // The header floats over the page: Up reaches the hero beneath it first.
   const fallback = (item: Item) => Boolean(item.target.closest('[data-nav-fallback]'));
+  // Side columns are beside the page: sideways from it, the page comes
+  // first, then the nearest column (Settings' list of sections before the
+  // sidebar).
+  const columnOf = (item: Item) => (side ? null : item.target.closest('[data-nav-side]'));
+  const columns = [...new Set(candidates.map(columnOf))]
+    .filter((column) => column !== null)
+    .toSorted((a, b) => columnGap(active, a, direction) - columnGap(active, b, direction));
+  const pools = [
+    candidates.filter((item) => !fallback(item) && columnOf(item) === null),
+    ...columns.map((column) => candidates.filter((item) => columnOf(item) === column)),
+  ];
   const next = active.closest('[data-nav-fallback]')
     ? choose(candidates)
-    : (choose(candidates.filter((item) => !fallback(item))) ?? choose(candidates));
-  if (next) {
-    focusWithKeys(next.target);
-    if (direction === 'up') revealPageTop(next.target);
+    : (pools.reduce<Item | undefined>((found, pool) => found ?? choose(pool), undefined) ??
+      choose(candidates));
+  const target = next && side ? entryOf(next.target, side) : next?.target;
+  if (target) {
+    focusWithKeys(target);
+    if (direction === 'up') revealPageTop(target);
   }
-  return Boolean(next);
+  return Boolean(target);
+}
+
+/** The last item focused in each `data-nav-entry` region. */
+const entries = new WeakMap<Element, HTMLElement>();
+
+/**
+ * Where a move from the side column `side` onto `target` lands: inside a
+ * `data-nav-entry` region, the item last focused there, else its first
+ * (passing over `data-nav-forget` ones, such as a section's reset).
+ */
+function entryOf(target: HTMLElement, side: Element): HTMLElement {
+  const region = target.closest('[data-nav-entry]');
+  if (!region || region.contains(side)) return target;
+  const last = entries.get(region);
+  if (last && region.contains(last) && isNavigable(last)) return last;
+  return navigables(region).find((item) => !item.hasAttribute('data-nav-forget')) ?? target;
 }
 
 /** The item a menu or dialog starts on: its selected option, or its first item. */
@@ -305,6 +344,8 @@ function onFocusIn(router: Router, event: FocusEvent) {
   if (usingKeys) target.setAttribute(KEY_FOCUS_ATTRIBUTE, '');
   if (!target.hasAttribute('data-nav-forget')) {
     memory.remember(groupsOf(target, document.body), target);
+    const region = target.closest('[data-nav-entry]');
+    if (region) entries.set(region, target);
   }
   if (target.closest('main')) snapshots.set(router.state.location.key, describe(target));
 }

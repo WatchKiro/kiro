@@ -3,13 +3,16 @@ import { createStore } from 'zustand/vanilla';
 
 import {
   DEFAULT_SETTINGS,
+  areFieldsChanged,
   parseSettings,
+  withDefaultFields,
   withDefaults,
   withGeneral,
   withPlayback,
   withRows,
   withStreams,
   withSubtitles,
+  type SettingsFields,
   type SettingsSection,
 } from '@/features/settings/settings-data';
 import {
@@ -59,6 +62,11 @@ export interface SettingsState {
   updateRows: (page: keyof RowSettings, layout: CatalogRowSetting[] | null) => Promise<void>;
   /** Puts one section back to its defaults, as {@link updatePlayback}. */
   reset: (section: SettingsSection) => Promise<void>;
+  /**
+   * Puts some fields back to their defaults in one save (a page of Settings
+   * that shows parts of several sections), as {@link updatePlayback}.
+   */
+  resetFields: (fields: SettingsFields) => Promise<void>;
 }
 
 export function createSettingsStore(backend: SettingsBackend) {
@@ -121,6 +129,7 @@ export function createSettingsStore(backend: SettingsBackend) {
       updateStreams: (patch) => save((settings) => withStreams(settings, patch)),
       updateRows: (page, layout) => save((settings) => withRows(settings, page, layout)),
       reset: (section) => save((settings) => withDefaults(settings, section)),
+      resetFields: (fields) => save((settings) => withDefaultFields(settings, fields)),
     };
   });
 }
@@ -129,4 +138,25 @@ export const settingsStore = createSettingsStore(settingsCommands);
 
 export function useSettingsStore<T>(selector: (state: SettingsState) => T): T {
   return useStore(settingsStore, selector);
+}
+
+/** Settings can be changed once they've loaded. */
+export function useSettingsEditable(): boolean {
+  return useSettingsStore((state) => state.status === 'ready');
+}
+
+/**
+ * A Settings section's "Reset to defaults": puts `fields` back, and is
+ * disabled while none of them has changed (or nothing has loaded).
+ */
+export function useFieldsReset(fields: SettingsFields | undefined) {
+  const editable = useSettingsEditable();
+  const changed = useSettingsStore(
+    (state) => fields !== undefined && areFieldsChanged(state.settings, fields),
+  );
+  const resetFields = useSettingsStore((state) => state.resetFields);
+  return {
+    onReset: fields ? () => void resetFields(fields) : undefined,
+    resetDisabled: !editable || !changed,
+  };
 }

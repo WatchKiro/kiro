@@ -15,8 +15,11 @@ import {
   unusedAvatar,
 } from '@/features/profiles/profiles-data';
 import { useProfilesStore } from '@/features/profiles/profiles-store';
-import { Section, ToggleSetting } from '@/features/settings/settings-controls';
+import { Group, Section, ToggleSetting } from '@/features/settings/settings-controls';
+import { settingElementId, settingsSection } from '@/features/settings/settings-sections';
 import { describeError, type Profile } from '@/services/native';
+
+const SECTION = settingsSection('profiles');
 
 /** What the section has open: adding, editing or deleting a profile. */
 type Open =
@@ -36,78 +39,87 @@ export function ProfilesSection() {
   const [open, setOpen] = useState<Open>(null);
   const [error, setError] = useState<string | null>(null);
 
-  if (!overview) return null;
+  if (!overview) {
+    return (
+      <Section title={SECTION.title} description={SECTION.description}>
+        <p className="text-sm text-ink-400">Loading…</p>
+      </Section>
+    );
+  }
   const current = activeProfile(overview);
   const full = overview.profiles.length >= MAX_PROFILES;
 
   return (
-    <Section
-      id="profiles"
-      title="Profiles"
-      description="Everyone using Kiro on this computer can have their own library and settings. Addons are shared."
-    >
-      <ul className="divide-y divide-white/[0.05]">
-        {overview.profiles.map((profile) => {
-          const isCurrent = profile.id === current?.id;
-          // A locked profile is changed from inside it (its PIN unlocks it).
-          const lockedOut = profile.hasPin && !isCurrent;
-          return (
-            <li key={profile.id} className="flex items-center gap-4 px-5 py-3.5">
-              <ProfileAvatar name={profile.name} avatar={profile.avatar} locked={profile.hasPin} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-ink-100">{profile.name}</p>
-                <p className="text-xs text-ink-400">
-                  {[
-                    isCurrent && 'In use',
-                    profile.hasPin && 'PIN',
-                    lockedOut && 'Switch to it to change it',
-                  ]
-                    .filter(Boolean)
-                    .join(' · ') || 'No PIN'}
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={lockedOut}
-                aria-label={`Edit ${profile.name}`}
-                onClick={() => setOpen({ kind: 'edit', profile })}
-              >
-                <Pencil aria-hidden className="size-3.5" />
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={isCurrent || overview.profiles.length === 1}
-                aria-label={`Delete ${profile.name}`}
-                title={isCurrent ? 'Switch to another profile to delete this one' : undefined}
-                onClick={() => setOpen({ kind: 'delete', profile })}
-              >
-                <Trash2 aria-hidden className="size-3.5" />
-              </Button>
-            </li>
-          );
-        })}
-      </ul>
-      <div className="flex flex-wrap items-center gap-3 border-t border-white/[0.05] px-5 py-4">
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={full}
-          onClick={() => setOpen({ kind: 'create' })}
-        >
-          <Plus aria-hidden className="size-4" />
-          Add profile
-        </Button>
-        <p className="text-xs text-ink-400">
-          {full
-            ? `That’s the most profiles one computer can have (${MAX_PROFILES}).`
-            : `Up to ${MAX_PROFILES} profiles.`}
-        </p>
-      </div>
-      <div className="border-t border-white/[0.05]">
+    <Section title={SECTION.title} description={SECTION.description}>
+      <Group title="People">
+        <ul id={settingElementId('profiles')} className="divide-y divide-white/[0.05]">
+          {overview.profiles.map((profile) => {
+            const isCurrent = profile.id === current?.id;
+            // A locked profile is changed from inside it (its PIN unlocks it).
+            const lockedOut = profile.hasPin && !isCurrent;
+            return (
+              <li key={profile.id} className="flex items-center gap-4 px-5 py-3.5">
+                <ProfileAvatar
+                  name={profile.name}
+                  avatar={profile.avatar}
+                  locked={profile.hasPin}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink-100">{profile.name}</p>
+                  <p className="text-xs text-ink-400">
+                    {[
+                      isCurrent && 'In use',
+                      profile.hasPin && 'PIN',
+                      lockedOut && 'Switch to it to change it',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || 'No PIN'}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={lockedOut}
+                  aria-label={`Edit ${profile.name}`}
+                  onClick={() => setOpen({ kind: 'edit', profile })}
+                >
+                  <Pencil aria-hidden className="size-3.5" />
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isCurrent || overview.profiles.length === 1}
+                  aria-label={`Delete ${profile.name}`}
+                  title={isCurrent ? 'Switch to another profile to delete this one' : undefined}
+                  onClick={() => setOpen({ kind: 'delete', profile })}
+                >
+                  <Trash2 aria-hidden className="size-3.5" />
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={full}
+            onClick={() => setOpen({ kind: 'create' })}
+          >
+            <Plus aria-hidden className="size-4" />
+            Add profile
+          </Button>
+          <p className="text-xs text-ink-400">
+            {full
+              ? `That’s the most profiles one computer can have (${MAX_PROFILES}).`
+              : `Up to ${MAX_PROFILES} profiles.`}
+          </p>
+        </div>
+      </Group>
+      <Group title="When Kiro opens">
         <ToggleSetting
+          id="ask-whos-watching"
           label="Ask who’s watching"
           hint={
             overview.profiles.length > 1
@@ -120,12 +132,12 @@ export function ProfilesSection() {
             void setShowPicker(show).catch((failure: unknown) => setError(describeError(failure)))
           }
         />
-      </div>
-      {error && (
-        <p role="alert" className="border-t border-white/[0.05] px-5 py-3 text-sm text-red-300">
-          {error}
-        </p>
-      )}
+        {error && (
+          <p role="alert" className="px-5 py-3 text-sm text-red-300">
+            {error}
+          </p>
+        )}
+      </Group>
 
       {open?.kind === 'create' && (
         <ProfileEditor profiles={overview.profiles} onClose={() => setOpen(null)} />

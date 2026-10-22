@@ -1,6 +1,6 @@
 /**
  * One stream's track choice and addon subtitles: applies the preferred
- * languages (Settings → Playback) once the stream's tracks are known, lists
+ * languages (Settings → Subtitles) once the stream's tracks are known, lists
  * the subtitles addons offer as they arrive, and loads one into the player
  * when it is picked, by the user or by the preferred subtitle languages.
  *

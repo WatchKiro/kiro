@@ -85,7 +85,8 @@ export const router = createBrowserRouter([
         }),
       },
       {
-        path: 'settings',
+        // One section at a time: `/settings/playback`. `/settings` is General.
+        path: 'settings/:section?',
         handle: { title: 'Settings' } satisfies RouteHandle,
         lazy: async () => ({
           Component: (await import('@/features/settings/settings-page')).SettingsPage,

@@ -7,6 +7,7 @@ import {
   MAX_KEYWORDS,
   MAX_KEYWORD_CHARS,
   MAX_LANGUAGES,
+  areFieldsChanged,
   isChanged,
   isHexColor,
   isPassthroughAvailable,
@@ -17,6 +18,7 @@ import {
   normalizeLanguages,
   normalizePassthroughFormats,
   parseSettings,
+  withDefaultFields,
   withDefaults,
   withGeneral,
   withPassthroughFormat,
@@ -253,6 +255,27 @@ describe('resetting', () => {
     const reset = withDefaults(changed, 'playback');
     assert.deepEqual(reset.playback, DEFAULT_SETTINGS.playback);
     assert.equal(reset.subtitles.edge, 'shadow');
+  });
+
+  it('puts some fields back, across sections, and leaves the rest', () => {
+    // Settings → Subtitles: two playback fields and the subtitle section.
+    const changed = withSubtitles(
+      withPlayback(DEFAULT_SETTINGS, { subtitlesOff: true, audioLanguages: ['ja'] }),
+      { size: 150 },
+    );
+    const fields = {
+      playback: ['subtitlesOff', 'subtitleLanguages'],
+      subtitles: ['size'],
+    } as const;
+    assert.ok(areFieldsChanged(changed, fields));
+    const reset = withDefaultFields(changed, fields);
+    assert.equal(reset.playback.subtitlesOff, false);
+    assert.equal(reset.subtitles.size, DEFAULT_SETTINGS.subtitles.size);
+    // Audio's language isn't one of them.
+    assert.deepEqual(reset.playback.audioLanguages, ['ja']);
+    assert.ok(!areFieldsChanged(reset, fields));
+    assert.ok(areFieldsChanged(reset, { playback: ['audioLanguages'] }));
+    assert.equal(withDefaultFields(changed, {}), changed);
   });
 });
 
