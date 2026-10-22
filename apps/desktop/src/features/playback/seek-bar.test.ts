@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { bufferedAhead, dragStep, type DragState } from '@/features/playback/seek-bar';
+import {
+  bufferedAhead,
+  dragStep,
+  keyScrubDistance,
+  keyScrubPosition,
+  type DragState,
+} from '@/features/playback/seek-bar';
 
 describe('bufferedAhead', () => {
   it('draws what is buffered ahead of the position, clipped to the video', () => {
@@ -49,5 +55,24 @@ describe('dragStep', () => {
       drag: { position: null },
       seek: null,
     });
+  });
+});
+
+describe('keyScrubDistance and keyScrubPosition', () => {
+  it('moves faster the longer the key is held', () => {
+    assert.equal(keyScrubDistance(0), 0);
+    assert.equal(keyScrubDistance(500), 15);
+    assert.equal(keyScrubDistance(1000), 30);
+    assert.equal(keyScrubDistance(2000), 120);
+    assert.equal(keyScrubDistance(3000), 210);
+    assert.equal(keyScrubDistance(4000), 450);
+    assert.equal(keyScrubDistance(30_000), 6690, 'across a film in half a minute');
+  });
+
+  it('scrubs from where the first press landed, inside the video', () => {
+    assert.equal(keyScrubPosition(100, 1, 1000, 2853), 130);
+    assert.equal(keyScrubPosition(100, -1, 1000, 2853), 70);
+    assert.equal(keyScrubPosition(100, -1, 10_000, 2853), 0);
+    assert.equal(keyScrubPosition(2800, 1, 10_000, 2853), 2853);
   });
 });

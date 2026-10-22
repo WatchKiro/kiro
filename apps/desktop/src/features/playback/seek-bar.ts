@@ -52,3 +52,42 @@ export function dragStep(
       return { drag: { position: null }, seek: null };
   }
 }
+
+/**
+ * Holding ← or → scrubs: the first press steps as a tap does, and from the
+ * first key repeat on the thumb (and the preview card) travels from there,
+ * faster the longer the key is held, with the seek on release. Distance
+ * comes from how long the key has been held, not how many repeats the
+ * system sends, so every keyboard scrubs at the same speed.
+ */
+export const KEY_SCRUB_RATES: readonly { until: number; rate: number }[] = [
+  /** The first second: 30 s of video a second. */
+  { until: 1000, rate: 30 },
+  /** The next two: 90 s a second. */
+  { until: 3000, rate: 90 },
+  /** Then 4 minutes a second: across a film in half a minute. */
+  { until: Infinity, rate: 240 },
+];
+
+/** Seconds of video a key held for `heldMs` has scrubbed across. */
+export function keyScrubDistance(heldMs: number): number {
+  let distance = 0;
+  let from = 0;
+  for (const { until, rate } of KEY_SCRUB_RATES) {
+    const to = Math.min(heldMs, until);
+    if (to <= from) break;
+    distance += ((to - from) / 1000) * rate;
+    from = to;
+  }
+  return distance;
+}
+
+/** Where a key held `heldMs` in `direction` from `from` has scrubbed to. */
+export function keyScrubPosition(
+  from: number,
+  direction: -1 | 1,
+  heldMs: number,
+  duration: number,
+): number {
+  return Math.min(Math.max(from + direction * keyScrubDistance(heldMs), 0), duration);
+}

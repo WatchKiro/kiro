@@ -55,7 +55,12 @@ import {
   type SkipSegment,
 } from '@/features/playback/chapter-skip';
 import { AutoSkippedNotice, SkipButton } from '@/features/playback/skip-button';
-import { bufferedAhead, dragStep, type DragState } from '@/features/playback/seek-bar';
+import {
+  bufferedAhead,
+  dragStep,
+  keyScrubPosition,
+  type DragState,
+} from '@/features/playback/seek-bar';
 import type { PreviewFrame } from '@/features/playback/seek-preview';
 import { fallbackNotice } from '@/features/playback/stream-fallback';
 import { StreamChoices, StreamsMenu } from '@/features/playback/stream-menu';
@@ -402,6 +407,28 @@ function PlaybackSession({
   useEffect(() => {
     menuOpenRef.current = menuOpen;
   }, [menuOpen]);
+  const canHide = state === 'playing' && !menuOpen;
+  const hidden = (idle && canHide) || manualHidden;
+  /** A frame of the video above the seek bar while hovering (Settings → Playback). */
+  const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
+  const previewStarts = useMemo(
+    () => [
+      ...(view?.chapters ?? []).map((chapter) => chapter.start),
+      ...chapterSkip.segments.map((part) => part.start),
+    ],
+    [view?.chapters, chapterSkip.segments],
+  );
+  const preview = useSeekPreview({
+    enabled: seekPreviews,
+    url: request?.url ?? null,
+    duration: view?.duration ?? null,
+    active: active && !hidden,
+    position: view?.position ?? 0,
+    starts: previewStarts,
+  });
+  /** While a seek lands: the frame nearest its target, over the video. */
+  const seekFrame =
+    view && view.seekTarget !== null && showingVideo ? preview.frameAt(view.seekTarget) : undefined;
 
   // Keyboard: Space plays/pauses, ←/→ seek, M mutes, S skips the intro or
   // credits (so does Enter, a remote's OK, with nothing focused), Z/X shift
@@ -415,7 +442,38 @@ function PlaybackSession({
   const playNext = upNext?.playNow;
   /** Whether the Skip button is on screen, for Enter. */
   const skipShownRef = useRef(false);
+  /**
+   * ← or → held down (`seek-bar.ts`): where its first press landed, and
+   * from the first repeat on, where the scrub has reached and since when.
+   */
+  const keyHold = useRef<{
+    key: string;
+    direction: -1 | 1;
+    from: number;
+    since: number | null;
+    position: number | null;
+  } | null>(null);
+  const { setHover } = preview;
   useEffect(() => {
+    const onKeyUp = (event: KeyboardEvent) => {
+      const hold = keyHold.current;
+      if (!hold || event.key !== hold.key) return;
+      keyHold.current = null;
+      if (hold.position === null) return;
+      // The scrub ends: one seek, where it got to.
+      setScrub(null);
+      setHover(null);
+      if (player) run(player.seek(hold.position));
+    };
+    // The window lost the key: a scrub ends where it is.
+    const onBlur = () => {
+      const hold = keyHold.current;
+      keyHold.current = null;
+      if (hold?.position === null || hold === null) return;
+      setScrub(null);
+      setHover(null);
+      if (player) run(player.seek(hold.position));
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const action = keyAction(event);
@@ -435,8 +493,6 @@ function PlaybackSession({
         return;
       }
       if (!player || !view || !active) return;
-      const seekBy = (delta: number) =>
-        run(player.seek(clamp(view.position + delta, 0, view.duration ?? Infinity)));
       const paused = state === 'paused' || state === 'ended';
       const nothingFocused = event.target === document.body;
       const letter = event.key.toLowerCase();
@@ -448,12 +504,35 @@ function PlaybackSession({
       ) {
         event.preventDefault();
         run(paused ? player.play() : player.pause());
-      } else if (event.key === 'ArrowLeft' || media === 'rewind') {
+      } else if (
+        event.key === 'ArrowLeft' ||
+        event.key === 'ArrowRight' ||
+        media === 'rewind' ||
+        media === 'fastForward'
+      ) {
         event.preventDefault();
-        seekBy(-seekStep);
-      } else if (event.key === 'ArrowRight' || media === 'fastForward') {
-        event.preventDefault();
-        seekBy(seekStep);
+        const direction = event.key === 'ArrowLeft' || media === 'rewind' ? -1 : 1;
+        const hold = keyHold.current;
+        if (event.repeat && hold?.key === event.key && view.duration) {
+          // Held: scrub from where the first press landed, faster the longer
+          // it's held, with the thumb and the preview card following.
+          const now = performance.now();
+          hold.since ??= now;
+          hold.position = keyScrubPosition(hold.from, direction, now - hold.since, view.duration);
+          setScrub(hold.position);
+          setHover({ position: hold.position, pressed: true });
+        } else if (!event.repeat) {
+          // A tap: a step, as before.
+          const target = clamp(view.position + direction * seekStep, 0, view.duration ?? Infinity);
+          keyHold.current = {
+            key: event.key,
+            direction,
+            from: target,
+            since: null,
+            position: null,
+          };
+          run(player.seek(target));
+        }
       } else if (media === 'next' && playNext) {
         event.preventDefault();
         playNext();
@@ -482,13 +561,20 @@ function PlaybackSession({
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
   }, [
     player,
     view,
     active,
     state,
     seekStep,
+    setHover,
     toggleFullscreen,
     exitFullscreen,
     isFullscreen,
@@ -501,7 +587,6 @@ function PlaybackSession({
   ]);
 
   const idleTimer = useRef<number>(undefined);
-  const canHide = state === 'playing' && !menuOpen;
   useEffect(() => {
     const restart = () => {
       window.clearTimeout(idleTimer.current);
@@ -545,27 +630,6 @@ function PlaybackSession({
     };
   }, [canHide]);
   // Idle only counts while hiding is allowed (e.g. pausing shows the controls).
-  const hidden = (idle && canHide) || manualHidden;
-  /** A frame of the video above the seek bar while hovering (Settings → Playback). */
-  const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
-  const previewStarts = useMemo(
-    () => [
-      ...(view?.chapters ?? []).map((chapter) => chapter.start),
-      ...chapterSkip.segments.map((part) => part.start),
-    ],
-    [view?.chapters, chapterSkip.segments],
-  );
-  const preview = useSeekPreview({
-    enabled: seekPreviews,
-    url: request?.url ?? null,
-    duration: view?.duration ?? null,
-    active: active && !hidden,
-    position: view?.position ?? 0,
-    starts: previewStarts,
-  });
-  /** While a seek lands: the frame nearest its target, over the video. */
-  const seekFrame =
-    view && view.seekTarget !== null && showingVideo ? preview.frameAt(view.seekTarget) : undefined;
 
   // Hidden controls give up focus, so keys can't press what can't be seen:
   // ←/→ seek again, and ↑/↓ start from Play once the controls are back.

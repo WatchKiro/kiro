@@ -16,19 +16,19 @@ Kiro can be used from a sofa with arrows, Enter and Back, as on a TV. The same c
 | ?                 | Keyboard shortcuts                                                                    |
 | Tab, Shift Tab    | Unchanged: document order                                                             |
 
-| Keys       | Player                                                                                                                          |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Space      | Play or pause (even with a control focused)                                                                                     |
-| ← →        | Skip back or forward (Settings → Playback sets how far), unless a control was focused with the keys: then ← → move between them |
-| ↑ ↓        | Bring up the controls, then move between the seek bar, the control bar and the top bar                                          |
-| M, F, H    | Mute, full screen, hide or show the controls                                                                                    |
-| S          | Skip the intro or credits while the button shows; so does Enter (a remote's OK) with nothing focused                            |
-| Z X        | Subtitles 0.1 s earlier or later (for the subtitle track showing)                                                               |
-| J K        | Audio 0.1 s earlier or later                                                                                                    |
-| [ ]        | Slower or faster: 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2×                                                                              |
-| Escape     | Close the open panel (streams, subtitles and audio, sync and speed), else leave full screen, else go back                       |
-| Backspace  | Go back                                                                                                                         |
-| Media keys | Play/pause, play, pause, next episode, start over, skip back/forward, stop (go back)                                            |
+| Keys       | Player                                                                                                                                                                                                                                                                                 |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Space      | Play or pause (even with a control focused)                                                                                                                                                                                                                                            |
+| ← →        | Skip back or forward (Settings → Playback sets how far), unless a control was focused with the keys: then ← → move between them. Held down: scrub, with the preview card following, faster the longer it's held (30 s of video a second, then 90, then 4 minutes); one seek on release |
+| ↑ ↓        | Bring up the controls, then move between the seek bar, the control bar and the top bar                                                                                                                                                                                                 |
+| M, F, H    | Mute, full screen, hide or show the controls                                                                                                                                                                                                                                           |
+| S          | Skip the intro or credits while the button shows; so does Enter (a remote's OK) with nothing focused                                                                                                                                                                                   |
+| Z X        | Subtitles 0.1 s earlier or later (for the subtitle track showing)                                                                                                                                                                                                                      |
+| J K        | Audio 0.1 s earlier or later                                                                                                                                                                                                                                                           |
+| [ ]        | Slower or faster: 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2×                                                                                                                                                                                                                                     |
+| Escape     | Close the open panel (streams, subtitles and audio, sync and speed), else leave full screen, else go back                                                                                                                                                                              |
+| Backspace  | Go back                                                                                                                                                                                                                                                                                |
+| Media keys | Play/pause, play, pause, next episode, start over, skip back/forward, stop (go back)                                                                                                                                                                                                   |
 
 Typing is never navigation: in a text field, letters, Space, Backspace and Escape belong to the field (Escape clears the search, then leaves it). Up and Down leave a single-line field, and Left and Right leave it only past the start or end of its text (not when the key is held).
 
