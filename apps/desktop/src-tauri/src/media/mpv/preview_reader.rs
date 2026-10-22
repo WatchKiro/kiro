@@ -25,7 +25,13 @@
 //! [`REQUEST_TIMEOUT`]. A host that ignores ranges can't be previewed at all
 //! (seeking would mean reading from the start), and is reported as such
 //! ([`ReaderContext::ranges_refused`]); other failures to open fall back to
-//! mpv's own reading.
+//! mpv's own reading. So does an HLS playlist ([`ReaderContext::playlist`]):
+//! its segments are separate files, which libavformat's HLS demuxer opens
+//! by URL itself, so there is nothing for bounded reads to do, and through
+//! this reader mpv would take the playlist for a plain list of files. Of a
+//! master playlist, mpv is given only the variant with the lowest bitrate
+//! ([`lowest_variant`]): opening the master reads the first segments of
+//! every variant, tens of MB for a stream with a 1080p one.
 
 use std::collections::VecDeque;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -153,6 +159,10 @@ pub struct ReaderContext {
     /// The host answered without the range asked for: it can't be previewed
     /// (seeking would mean reading the stream from the start).
     refused: AtomicBool,
+    /// The stream is an HLS playlist: mpv reads it itself.
+    playlist: AtomicBool,
+    /// Of a master playlist, the variant previews read.
+    variant: Mutex<Option<Url>>,
     /// What the last few previews downloaded before their frame was there.
     bursts: Mutex<VecDeque<u64>>,
     /// The stream's opening, kept across cores for opening it again.
@@ -186,6 +196,8 @@ impl ReaderContext {
             bytes: AtomicU64::new(0),
             taken: AtomicU64::new(0),
             refused: AtomicBool::new(false),
+            playlist: AtomicBool::new(false),
+            variant: Mutex::new(None),
             bursts: Mutex::new(VecDeque::new()),
             opening,
             recording: AtomicBool::new(true),
@@ -238,6 +250,21 @@ impl ReaderContext {
     pub fn ranges_refused(&self) -> bool {
         self.refused.load(Ordering::Relaxed)
     }
+
+    /// Whether the stream turned out to be an HLS playlist, which this
+    /// reader doesn't open.
+    pub fn playlist(&self) -> bool {
+        self.playlist.load(Ordering::Relaxed)
+    }
+
+    /// For an HLS master playlist, the variant mpv should read instead:
+    /// the one with the lowest bitrate that has video.
+    pub fn variant(&self) -> Option<Url> {
+        self.variant
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 /// Makes `kiro-preview://<url>` open through a [`Reader`] on `mpv`.
@@ -255,6 +282,8 @@ enum ReadError {
     Cancelled,
     /// The host answered, but not with the range asked for.
     Refused,
+    /// The stream is an HLS playlist.
+    Playlist,
     Network,
 }
 
@@ -348,6 +377,17 @@ impl Reader {
             self.context().refused.store(true, Ordering::Relaxed);
         }
         let (body, total, served_by) = result?;
+        if start == 0 && is_playlist(&body) {
+            // Not kept for the next opening either: mpv will read it itself.
+            let context = self.context();
+            *context
+                .variant
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) =
+                lowest_variant(&String::from_utf8_lossy(&body), &served_by);
+            context.playlist.store(true, Ordering::Relaxed);
+            return Err(ReadError::Playlist);
+        }
         if served_by != self.url {
             self.resolved = Some(served_by);
         }
@@ -457,6 +497,82 @@ impl Reader {
             .fetch_add(count as u64, Ordering::Relaxed);
         Ok(count)
     }
+}
+
+/// Whether a stream starting with `head` is an HLS playlist (`#EXTM3U`
+/// first, after a byte order mark if there is one).
+fn is_playlist(head: &[u8]) -> bool {
+    head.strip_prefix(b"\xEF\xBB\xBF".as_slice())
+        .unwrap_or(head)
+        .starts_with(b"#EXTM3U")
+}
+
+/// Codecs (RFC 6381 names, as an HLS `CODECS` attribute lists them) that
+/// are video.
+const VIDEO_CODECS: &[&str] = &[
+    "avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe", "vp08", "vp09", "av01", "mp4v",
+];
+
+/// The variant of an HLS master playlist with the lowest bandwidth that has
+/// video (a resolution, a video codec, or no codecs listed), resolved
+/// against `base`, the URL the playlist came from. `None` for a media
+/// playlist (it lists segments, not variants), or when no variant has an
+/// http(s) URL.
+fn lowest_variant(playlist: &str, base: &Url) -> Option<Url> {
+    let mut lowest: Option<(u64, Url)> = None;
+    let mut lines = playlist.lines().map(str::trim);
+    while let Some(line) = lines.next() {
+        let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") else {
+            continue;
+        };
+        // The variant's URL is the next line that isn't a tag or blank.
+        let Some(uri) = lines.find(|line| !line.is_empty() && !line.starts_with('#')) else {
+            break;
+        };
+        let video = attribute(attributes, "RESOLUTION").is_some()
+            || attribute(attributes, "CODECS").is_none_or(|codecs| {
+                codecs.split(',').any(|codec| {
+                    VIDEO_CODECS
+                        .iter()
+                        .any(|video| codec.trim().starts_with(video))
+                })
+            });
+        let Some(url) = base
+            .join(uri)
+            .ok()
+            .and_then(|url| parse_stream_url(url.as_str()).ok())
+        else {
+            continue;
+        };
+        let bandwidth = attribute(attributes, "BANDWIDTH")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(u64::MAX);
+        if video && lowest.as_ref().is_none_or(|(least, _)| bandwidth < *least) {
+            lowest = Some((bandwidth, url));
+        }
+    }
+    lowest.map(|(_, url)| url)
+}
+
+/// The value of `name` in an HLS attribute list (`A=1,B="x,y"`), without
+/// the quotes of a quoted one.
+fn attribute<'a>(list: &'a str, name: &str) -> Option<&'a str> {
+    let mut rest = list;
+    while !rest.is_empty() {
+        let (key, after) = rest.split_once('=')?;
+        let (value, next) = match after.strip_prefix('"') {
+            Some(quoted) => {
+                let (value, next) = quoted.split_once('"')?;
+                (value, next.strip_prefix(',').unwrap_or(next))
+            }
+            None => after.split_once(',').unwrap_or((after, "")),
+        };
+        if key.trim() == name {
+            return Some(value);
+        }
+        rest = next;
+    }
+    None
 }
 
 /// The total size from a `Content-Range: bytes <start>-<end>/<total>` that
@@ -585,6 +701,70 @@ mod tests {
         assert_eq!(content_range("bytes 0-262143/524972258", 4096), None);
         assert_eq!(content_range("items 0-1/2", 0), None);
         assert_eq!(content_range("bytes 0-262143", 0), None);
+    }
+
+    #[test]
+    fn knows_an_hls_playlist_by_its_first_line() {
+        assert!(is_playlist(
+            b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nlow.m3u8\n"
+        ));
+        assert!(is_playlist(b"\xEF\xBB\xBF#EXTM3U\r\n"));
+        // A video file, or a playlist's name somewhere else in one.
+        assert!(!is_playlist(b"\x1A\x45\xDF\xA3 matroska"));
+        assert!(!is_playlist(b"\x00\x00\x00\x20ftypisom #EXTM3U"));
+        assert!(!is_playlist(b""));
+    }
+
+    #[test]
+    fn reads_hls_attributes() {
+        let list =
+            r#"PROGRAM-ID=1,BANDWIDTH=2149280,CODECS="mp4a.40.2,avc1.64001f",RESOLUTION=1280x720"#;
+        assert_eq!(attribute(list, "BANDWIDTH"), Some("2149280"));
+        assert_eq!(attribute(list, "CODECS"), Some("mp4a.40.2,avc1.64001f"));
+        assert_eq!(attribute(list, "RESOLUTION"), Some("1280x720"));
+        assert_eq!(attribute(list, "FRAME-RATE"), None);
+        assert_eq!(attribute("", "BANDWIDTH"), None);
+    }
+
+    #[test]
+    fn picks_the_lowest_hls_variant_with_video() {
+        let base = Url::parse("https://cdn.example.com/show/master.m3u8?token=abc").unwrap();
+        let master = "#EXTM3U\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=6221600,CODECS=\"mp4a.40.2,avc1.640028\",RESOLUTION=1920x1080\n\
+            1080/index.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=64000,CODECS=\"mp4a.40.5\"\n\
+            audio/index.m3u8\n\
+            #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=10000,URI=\"iframes.m3u8\"\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=246440,CODECS=\"mp4a.40.5,avc1.42000d\",RESOLUTION=320x184\n\
+            \n\
+            https://other.example.com/240/index.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=460560,RESOLUTION=512x288\n\
+            380/index.m3u8\n";
+        // Not the audio-only one, nor the I-frame playlist; an absolute URL
+        // as it is.
+        assert_eq!(
+            lowest_variant(master, &base).map(String::from),
+            Some("https://other.example.com/240/index.m3u8".into())
+        );
+        // A relative URL is resolved against the playlist's.
+        let without = master.replace(
+            "https://other.example.com/240/index.m3u8",
+            "file:///240.m3u8",
+        );
+        assert_eq!(
+            lowest_variant(&without, &base).map(String::from),
+            Some("https://cdn.example.com/show/380/index.m3u8".into()),
+            "only http(s)"
+        );
+        // A variant without codecs may be video.
+        let unlabelled = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nlow.m3u8\n";
+        assert_eq!(
+            lowest_variant(unlabelled, &base).map(String::from),
+            Some("https://cdn.example.com/show/low.m3u8".into())
+        );
+        // A media playlist has no variants.
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nseg0.ts\n#EXT-X-ENDLIST\n";
+        assert_eq!(lowest_variant(media, &base), None);
     }
 
     /// A reader on `context`, which the test keeps alive.

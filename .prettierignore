@@ -12,3 +12,6 @@ coverage/
 **/src-tauri/target/
 **/src-tauri/gen/
 **/src-tauri/icons/
+
+# Video test data: MPEG-TS segments, not TypeScript.
+**/testdata/**/*.ts
