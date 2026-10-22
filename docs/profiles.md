@@ -9,6 +9,7 @@ People sharing a computer each get their own Kiro: their own watchlist, history,
 | The library: watchlist, watch history, saved progress, Continue watching, and with it Up next and "Resume from"                                                             | Installed addons and their order: one setup per computer (`addons.json`)    |
 | Settings: playback (languages, resume, Up next, volume, "Mark as watched at", keep the screen on), subtitles, streams, Discover/Movies/TV Shows rows, and General → Discord | Caches (SkipDB intro times, addon responses) and the app's own updates      |
 | Which profile was used last (it opens next launch)                                                                                                                          | Whether "Who’s watching?" shows at launch, and the sidebar collapsed or not |
+| Whether the [first-run setup](first-run.md) was completed or skipped                                                                                                        |                                                                             |
 
 Addons are shared because installing them is setup, not taste: the person who sets up the computer installs them once, and everyone can then hide catalogue rows they don't want (rows are per profile). A Stremio import brings its addons in for everyone and its library into the active profile only.
 
@@ -50,16 +51,17 @@ The picker and the PIN pad are TV-style screens and work with arrows, Enter and 
 
 `commands/profiles.rs`, granted by `capabilities/profiles.json` (only these):
 
-| Command                   | Arguments                | Notes                                                                      |
-| ------------------------- | ------------------------ | -------------------------------------------------------------------------- |
-| `profile_list`            |                          | Every profile (never a PIN hash), the active one, `showPicker`             |
-| `profile_create`          | `name`, `avatar`, `pin?` | At most 8; names distinct ignoring case                                    |
-| `profile_rename`          | `id`, `name`, `pin?`     | `pin`: needed for a locked profile other than the active one               |
-| `profile_set_avatar`      | `id`, `avatar`, `pin?`   | One of `AVATARS`                                                           |
-| `profile_set_pin`         | `id`, `newPin`, `pin?`   | `newPin: null` removes it                                                  |
-| `profile_delete`          | `id`                     | Not the active or last profile; no PIN (see Forgotten PIN)                 |
-| `profile_switch`          | `id`, `pin?`             | `PIN_REQUIRED` or `WRONG_PIN` for a locked profile, even if already active |
-| `profile_set_show_picker` | `show`                   |                                                                            |
+| Command                    | Arguments                | Notes                                                                           |
+| -------------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `profile_list`             |                          | Every profile (never a PIN hash), the active one, `showPicker`                  |
+| `profile_create`           | `name`, `avatar`, `pin?` | At most 8; names distinct ignoring case                                         |
+| `profile_rename`           | `id`, `name`, `pin?`     | `pin`: needed for a locked profile other than the active one                    |
+| `profile_set_avatar`       | `id`, `avatar`, `pin?`   | One of `AVATARS`                                                                |
+| `profile_set_pin`          | `id`, `newPin`, `pin?`   | `newPin: null` removes it                                                       |
+| `profile_delete`           | `id`                     | Not the active or last profile; no PIN (see Forgotten PIN)                      |
+| `profile_switch`           | `id`, `pin?`             | `PIN_REQUIRED` or `WRONG_PIN` for a locked profile, even if already active      |
+| `profile_set_show_picker`  | `show`                   |                                                                                 |
+| `profile_finish_first_run` | `outcome`                | `completed` or `skipped`, for the active profile ([first-run.md](first-run.md)) |
 
 Each returns the profiles as they are now. Arguments are validated at the boundary (`ProfileId`, `ProfileName`, `Avatar`, `Pin` deserialize only from valid values).
 

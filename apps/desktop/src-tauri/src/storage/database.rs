@@ -25,6 +25,7 @@ pub const FILE_NAME: &str = "kiro.sqlite3";
 const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0001_library.sql"),
     include_str!("migrations/0002_profiles.sql"),
+    include_str!("migrations/0003_first_run.sql"),
 ];
 
 #[derive(Debug)]

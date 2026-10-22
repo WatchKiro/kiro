@@ -146,10 +146,10 @@ describe('SubtitleSources', () => {
 
   it('includes the stream’s own subtitles', async () => {
     const fake = fakePlayer();
-    sources(fake, { subtitleLanguages: ['de'] }, [{ ...sub('ger'), origin: 'TorBox' }]);
+    sources(fake, { subtitleLanguages: ['de'] }, [{ ...sub('ger'), origin: 'Beta' }]);
     fake.load();
     await settle();
-    assert.deepEqual(fake.calls, ['add https://subs.example/ger/1.srt German · TorBox ger']);
+    assert.deepEqual(fake.calls, ['add https://subs.example/ger/1.srt German · Beta ger']);
   });
 
   it('respects subtitles off by default', async () => {

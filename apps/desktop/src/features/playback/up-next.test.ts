@@ -72,13 +72,13 @@ describe('isCountingDown', () => {
 describe('bingeStream', () => {
   it('picks the first playable stream with the same binge group', () => {
     const streams = [
-      stream('https://cdn.example/4k.mkv', 'torbox|2160p'),
-      stream('http://cdn.example/insecure.mkv', 'torbox|1080p'),
-      stream(undefined, 'torbox|1080p'),
-      stream('https://cdn.example/1080p.mkv', 'torbox|1080p'),
-      stream('https://cdn.example/1080p-b.mkv', 'torbox|1080p'),
+      stream('https://cdn.example/4k.mkv', 'beta|2160p'),
+      stream('http://cdn.example/insecure.mkv', 'beta|1080p'),
+      stream(undefined, 'beta|1080p'),
+      stream('https://cdn.example/1080p.mkv', 'beta|1080p'),
+      stream('https://cdn.example/1080p-b.mkv', 'beta|1080p'),
     ];
-    assert.equal(bingeStream(streams, 'torbox|1080p')?.url, 'https://cdn.example/1080p.mkv');
+    assert.equal(bingeStream(streams, 'beta|1080p')?.url, 'https://cdn.example/1080p.mkv');
   });
 
   it('matches nothing without a binge group, or when the release is missing', () => {
@@ -121,7 +121,7 @@ describe('upNextAction', () => {
   it('plays the best-ranked stream when the same release has none', () => {
     const best = ranking([
       stream('https://other.example/720.mkv'),
-      { url: 'https://other.example/1080.mkv', name: '[TB+] Other\n1080p' },
+      { url: 'https://other.example/1080.mkv', name: '[XY+] Other\n1080p' },
     ]);
     for (const action of [
       upNextAction(ready([stream('https://cdn.example/x', 'other')]), 'g', true, best),

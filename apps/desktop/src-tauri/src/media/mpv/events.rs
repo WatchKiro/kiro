@@ -189,7 +189,7 @@ fn failure(error: &client::Error) -> PlayerFailure {
     PlayerFailure {
         code,
         message: mpv_error_message(error).to_owned(),
-        // Network failures (expired debrid links, dropped connections) can
+        // Network failures (expired links, dropped connections) can
         // succeed on a reload; a format mpv cannot read will not.
         recoverable: matches!(code, FailureCode::Network | FailureCode::Unknown),
     }

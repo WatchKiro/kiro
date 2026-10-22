@@ -1232,7 +1232,7 @@ function OpeningArtwork({
 }: {
   artwork: PlaybackArtwork;
   title: string;
-  /** The chosen stream, e.g. `Torrentio · 4K · HDR · Cached`. */
+  /** The chosen stream, e.g. `Example · 4K · HDR · Cached`. */
   streamLabel: string | undefined;
   visible: boolean;
   opening: boolean;

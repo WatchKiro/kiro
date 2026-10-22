@@ -62,7 +62,7 @@ Events go to the attached webview over a Tauri `Channel` passed to `player_attac
 - **Time.** `timeUpdate` is throttled to every 250 ms during playback and sent immediately on seek, pause, load and duration changes.
 - **End.** mpv runs with `keep-open`, so the last frame stays up and `ended` fires on `eof-reached`. mpv reports `pause` just before `eof-reached`, so a brief `paused` precedes `ended`. `NativePlayer.play()` after the end seeks to 0 first.
 - **Delays and speed.** `sub-delay`, `audio-delay` and `speed` become one `timingChange` event, `{ subtitleDelay, audioDelay, speed }` (to the millisecond), which only the native player has: it isn't part of `PlayerEventMap`, and `NativePlayer` keeps it in its view without re-emitting it.
-- **Errors.** A failed `end-file` becomes an `error` event (`NETWORK` and `UNKNOWN` are marked recoverable, so expired debrid links can be retried) and the `error` state, which holds until the next load.
+- **Errors.** A failed `end-file` becomes an `error` event (`NETWORK` and `UNKNOWN` are marked recoverable, so expired links can be retried) and the `error` state, which holds until the next load.
 
 The only remaining periodic read is the stats overlay (`player_stats`, once a second while it is open): decoder and renderer details are not part of the event stream.
 
@@ -91,7 +91,7 @@ Resuming follows **Settings → Playback → Resume playback**: _Resume_ (the de
 
 A title page's **Play** (and **Resume S2 E4**, and Discover's Play) starts the best stream without showing the list. It waits until every stream addon has answered, so a slower addon with a better stream still counts.
 
-- `parseStreamQuality` (`@kiro/addon-sdk`) reads resolution, HDR / Dolby Vision, codec, source (remux, BluRay, WEB, cam…), Atmos and channels, size, languages and the debrid **cached** marker (`[TB+]`, ⚡, "cached", "instant"; `[TB download]`, ⏳, "uncached" mean not cached) from the stream's free-form `name`, `description`, `title` and `behaviorHints`. Anything it doesn't recognise is left out.
+- `parseStreamQuality` (`@kiro/addon-sdk`) reads resolution, HDR / Dolby Vision, codec, source (remux, BluRay, WEB, cam…), Atmos and channels, size, languages and the **cached** marker some addons add for files that are ready to start at once (a bracketed tag such as `[XY+]`, ⚡, "cached", "instant"; `[XY download]`, ⏳, "uncached" mean not cached) from the stream's free-form `name`, `description`, `title` and `behaviorHints`. Anything it doesn't recognise is left out.
 - `rankStreams` (`features/title/stream-ranking.ts`) keeps only what `classifyStream` can play (https) and orders it: cached first (unmarked streams, such as direct links, count as ready but come after cached ones), no cams, a language from Settings → Playback's audio languages (the system's language when none are set), the highest resolution up to the preferred maximum, HDR (or SDR), a sensible size for the resolution, then source, audio, codec and size. Remaining ties keep addon order, then the addon's own order.
 - The preferences (maximum resolution, prefer HDR, prefer cached) are in **Settings → Streams**, stored by the core in `settings.json` with the playback settings (the `streams` section). Play waits for them to load.
 - The same section's filters (`filterReasons`) leave out cam, telesync and screener releases, files over a maximum size (an unknown size passes), codecs to avoid (AV1, HEVC) and streams naming an excluded keyword as a whole word (ignoring case; a space also matches `.`, `-` and `_`). Filtered streams are ranked like the rest but kept in `StreamRanking.filtered`: Play and Up next never pick them, and the stream list shows them folded away with the reasons and a Play button, so nothing silently disappears.
@@ -163,7 +163,7 @@ Each stream gets its own `PlaybackSession` (keyed by the history entry), so the 
 
 ## Dead streams and switching streams
 
-Links die, and a debrid service's "cached" marker can be wrong, so the player recovers on its own (`stream-fallback.ts`, `use-stream-switching.ts`):
+Links die, and an addon's "cached" marker can be wrong, so the player recovers on its own (`stream-fallback.ts`, `use-stream-switching.ts`):
 
 - **Fallback.** When a title's stream fails before its first frame (the `error` state, or a load the player refuses), the player opens the next stream in the order one-click Play ranked them (`useRankedStreams`, the title store's cached answers): streams from the same release (`bingeGroup`) first, then the rest in ranked order. Filtered streams (Settings → Streams) are never fallen back to, and a URL is only tried once. A notice says "That stream didn't work, trying the next one (2 of 5)" while the next one opens and for 4 s after it shows. At most 5 streams are tried (`MAX_STREAM_ATTEMPTS`); after that, or when the list runs out, the player says "Couldn't play any of the 5 streams tried." with **Try again** and **Choose another stream**, which lists the streams under the message. If the addons are still answering, it waits for them before giving up.
 - **After the first frame**, a failure is not a dead link: the player keeps offering **Try again** (and **Choose another stream**), with no automatic switch.

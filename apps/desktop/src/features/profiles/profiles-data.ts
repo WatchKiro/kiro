@@ -2,7 +2,7 @@
  * Profiles: their avatars, limits and checks, mirroring the core's rules
  * (`src-tauri/src/profiles`) so a form can refuse a bad value before saving.
  */
-import type { Profile, ProfilesOverview } from '@/services/native';
+import type { FirstRun, Profile, ProfilesOverview } from '@/services/native';
 
 /** Most profiles one computer can have (`profiles::MAX_PROFILES`). */
 export const MAX_PROFILES = 8;
@@ -99,6 +99,11 @@ export function showsPickerAtLaunch(overview: ProfilesOverview): boolean {
   return overview.profiles.length > 1 && overview.showPicker;
 }
 
+/** As the core reads it: anything unknown counts as done, so the setup never sticks. */
+function parseFirstRun(value: unknown): FirstRun {
+  return value === 'pending' || value === 'skipped' ? value : 'completed';
+}
+
 /** What the core's profile commands return, checked before the app relies on it. */
 export function parseOverview(value: unknown): ProfilesOverview {
   const record = (value ?? {}) as Partial<ProfilesOverview>;
@@ -118,6 +123,7 @@ export function parseOverview(value: unknown): ProfilesOverview {
       avatar: avatarStyle(String(profile.avatar)).id,
       hasPin: profile.hasPin === true,
       createdAt: Number(profile.createdAt) || 0,
+      firstRun: parseFirstRun(profile.firstRun),
     })),
     active: typeof record.active === 'number' ? record.active : (profiles[0]?.id ?? 1),
     showPicker: record.showPicker !== false,

@@ -110,7 +110,7 @@ describe('settings store', () => {
   it('resets one section to its defaults, leaving the others', async () => {
     const { backend, calls } = fakeBackend({
       ...JAPANESE,
-      streams: { ...DEFAULT_SETTINGS.streams, excludeCam: true, excludedKeywords: ['YIFY'] },
+      streams: { ...DEFAULT_SETTINGS.streams, excludeCam: true, excludedKeywords: ['GROUP'] },
     });
     const store = createSettingsStore(backend);
     await store.getState().load();

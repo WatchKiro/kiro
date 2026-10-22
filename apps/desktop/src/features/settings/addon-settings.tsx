@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 
 import { AddonLogo } from '@/features/addons/addons-page';
 import { useAddonsStore, type ManagedAddon } from '@/features/addons/addons-store';
+import { SetupAgain } from '@/features/onboarding/setup-again';
 import { ChipButton, Section, Switch } from '@/features/settings/settings-controls';
 import { describeError } from '@/services/native';
 
@@ -167,6 +168,7 @@ export function AddonsSection() {
           Couldn’t save that change. {error}
         </p>
       )}
+      <SetupAgain />
     </Section>
   );
 }

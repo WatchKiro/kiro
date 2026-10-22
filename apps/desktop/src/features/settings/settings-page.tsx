@@ -739,7 +739,7 @@ function StreamsSection() {
         />
         <ToggleSetting
           label="Prefer cached streams"
-          hint="Pick streams your debrid service already has, so they start instantly."
+          hint="Pick streams the addon marks as ready to start at once (cached)."
           checked={streams.preferCached}
           disabled={disabled}
           onChange={(preferCached) => void updateStreams({ preferCached })}

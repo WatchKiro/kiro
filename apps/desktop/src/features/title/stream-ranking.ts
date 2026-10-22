@@ -36,7 +36,7 @@ export interface UnplayableStream {
 
 /** A playable stream the stream settings filter out: listed, never picked. */
 export interface FilteredStream extends RankedStream {
-  /** Why, for the list, e.g. `CAM`, `Over 20 GB`, `AV1`, `“YIFY”`. */
+  /** Why, for the list, e.g. `CAM`, `Over 20 GB`, `AV1`, `“GROUP”`. */
   reasons: string[];
 }
 
@@ -59,7 +59,7 @@ export interface RankingOptions extends StreamSettings {
 
 /**
  * Orders the streams Kiro can play, best first. In order of importance:
- * cached on a debrid service (when preferred), not a cam recording, in a
+ * marked cached by its addon (when preferred), not a cam recording, in a
  * language the viewer speaks, the highest resolution up to the preferred
  * maximum, HDR (or SDR), a sensible file size for the resolution, the source,
  * audio, codec, and the larger file. Remaining ties keep addon order (the
@@ -175,7 +175,7 @@ export const STREAM_BUDGET_MS = 4000;
 
 /**
  * Whether `choice` is good enough to start without waiting for the addons
- * still answering: cached on a debrid service (so it starts at once), at a
+ * still answering: marked cached by its addon (so it starts at once), at a
  * known resolution within the preferred maximum, not a cam recording, and in
  * a language the viewer speaks.
  */
@@ -322,7 +322,7 @@ export function formatSize(bytes: number) {
 
 /**
  * One line naming the chosen stream for the player's opening screen, e.g.
- * `Torrentio · 4K · DV · HDR · Atmos · 18.4 GB · Cached`.
+ * `Example · 4K · DV · HDR · Atmos · 18.4 GB · Cached`.
  */
 export function describeStream({ addon, quality }: Pick<RankedStream, 'addon' | 'quality'>) {
   return [addon.manifest.name, ...qualityBadges(quality), quality.cached ? 'Cached' : undefined]

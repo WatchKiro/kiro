@@ -137,7 +137,7 @@ function Title({ addons, type, id }: { addons: InstalledAddon[]; type: string; i
       ? best.ranking.filtered.length > 0
         ? 'Every stream found is filtered out by your stream settings. You can still play one below.'
         : best.ranking.unplayable.length > 0
-          ? 'None of the streams found can play in Kiro yet. Kiro plays direct https links, like those from a debrid service.'
+          ? 'None of the streams found can play in Kiro. Kiro plays direct https links.'
           : best.sources.every(({ entry }) => entry?.status === 'error')
             ? 'Streams couldn’t be loaded. Retry an addon below.'
             : 'No streams were found for this title.'

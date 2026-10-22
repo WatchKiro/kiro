@@ -3,6 +3,8 @@ import { NavigationType, Outlet, useLocation, useNavigationType } from 'react-ro
 
 import { Header } from '@/components/header';
 import { Sidebar } from '@/components/sidebar';
+import { FirstRunGate } from '@/features/onboarding/first-run';
+import { useSetupStore } from '@/features/onboarding/setup-store';
 import { ProfilePicker } from '@/features/profiles/profile-picker';
 import { useProfilesStore } from '@/features/profiles/profiles-store';
 import { useRouteHandle } from '@/hooks/use-route-handle';
@@ -15,7 +17,8 @@ import { isNativeRuntime } from '@/services/native';
  *
  * It opens on "Who’s watching?" when there's a profile to choose (more than
  * one, or a PIN to enter), before any page reads a library; switching
- * profiles later renders the page again for the new one.
+ * profiles later renders the page again for the new one. Then the profile's
+ * first-run setup, if it has something to set up.
  */
 export function AppLayout() {
   const native = isNativeRuntime();
@@ -23,6 +26,7 @@ export function AppLayout() {
   const picker = useProfilesStore((state) => state.picker);
   const active = useProfilesStore((state) => state.overview?.active);
   const loadProfiles = useProfilesStore((state) => state.load);
+  const setupOpen = useSetupStore((state) => state.open !== null);
 
   useEffect(() => {
     if (native) void loadProfiles();
@@ -37,8 +41,8 @@ export function AppLayout() {
   if (picker === 'launch') return <ProfilePicker />;
   return (
     <>
-      <Shell key={active} covered={picker === 'switch'} />
-      {picker === 'switch' && <ProfilePicker />}
+      <Shell key={active} covered={picker === 'switch' || setupOpen} />
+      {picker === 'switch' ? <ProfilePicker /> : <FirstRunGate key={active} />}
     </>
   );
 }

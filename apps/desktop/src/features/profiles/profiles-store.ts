@@ -2,7 +2,11 @@ import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
 
 import { libraryStore } from '@/features/library/library-store';
-import { parseOverview, showsPickerAtLaunch } from '@/features/profiles/profiles-data';
+import {
+  activeProfile,
+  parseOverview,
+  showsPickerAtLaunch,
+} from '@/features/profiles/profiles-data';
 import { settingsStore } from '@/features/settings/settings-store';
 import {
   describeError,
@@ -53,6 +57,11 @@ export interface ProfilesState {
   setPin: (id: number, newPin: string | null, pin?: string) => Promise<void>;
   remove: (id: number) => Promise<void>;
   setShowPicker: (show: boolean) => Promise<void>;
+  /**
+   * Records how the active profile's first-run setup ended. Only while it's
+   * pending: reopening the setup from Settings changes nothing.
+   */
+  finishFirstRun: (outcome: 'completed' | 'skipped') => Promise<void>;
 }
 
 /** What else changes with the profile; the app's stores by default. */
@@ -145,6 +154,11 @@ export function createProfilesStore(
       setPin: async (id, newPin, pin) => apply(await backend.setPin(id, newPin, pin)),
       remove: async (id) => apply(await backend.remove(id)),
       setShowPicker: async (show) => apply(await backend.setShowPicker(show)),
+      async finishFirstRun(outcome) {
+        const overview = get().overview;
+        if (overview && activeProfile(overview)?.firstRun !== 'pending') return;
+        apply(await backend.finishFirstRun(outcome));
+      },
     };
   });
 }

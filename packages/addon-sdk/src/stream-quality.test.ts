@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { parseStreamQuality, type Stream } from './index';
 
-const URL = 'https://debrid.example/play/abc';
+const URL = 'https://cdn.example/play/abc';
 
 function quality(stream: Omit<Stream, 'url'>) {
   return parseStreamQuality({ url: URL, ...stream });
@@ -11,15 +11,15 @@ function quality(stream: Omit<Stream, 'url'>) {
 
 // Stream texts in the shapes real addons send them.
 describe('parseStreamQuality: real-world streams', () => {
-  it('reads a cached Torrentio stream through TorBox', () => {
+  it('reads a cached stream with a bracketed + tag', () => {
     assert.deepEqual(
       quality({
-        name: '[TB+] Torrentio\n4k DV | HDR',
+        name: '[XY+] Example\n4k DV | HDR',
         title:
-          'Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX\n👤 214 💾 18.4 GB ⚙️ ThePirateBay',
+          'Sample.Film.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-GROUP\n👤 214 💾 18.4 GB ⚙️ Example',
         behaviorHints: {
-          bingeGroup: 'torrentio|4k|DV|HDR|WEB-DL|hevc|DDP|Atmos',
-          filename: 'Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX.mkv',
+          bingeGroup: 'example|4k|DV|HDR|WEB-DL|hevc|DDP|Atmos',
+          filename: 'Sample.Film.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-GROUP.mkv',
         },
       }),
       {
@@ -38,12 +38,12 @@ describe('parseStreamQuality: real-world streams', () => {
     );
   });
 
-  it('reads an uncached multi-audio Torrentio stream', () => {
+  it('reads an uncached multi-audio stream with a download tag', () => {
     assert.deepEqual(
       quality({
-        name: '[TB download] Torrentio\n1080p',
+        name: '[XY download] Example\n1080p',
         title:
-          'Dune Part Two 2024 1080p BluRay x264 DTS-HD MA 7.1-FGT\n👤 88 💾 14.2 GB ⚙️ 1337x\nMulti Audio / 🇬🇧 / 🇫🇷 / 🇮🇹',
+          'Sample Film 2024 1080p BluRay x264 DTS-HD MA 7.1-GROUP\n👤 88 💾 14.2 GB ⚙️ Example\nMulti Audio / 🇬🇧 / 🇫🇷 / 🇮🇹',
       }),
       {
         resolution: 1080,
@@ -61,11 +61,11 @@ describe('parseStreamQuality: real-world streams', () => {
     );
   });
 
-  it('reads a Real-Debrid remux', () => {
+  it('reads a cached remux with another service tag', () => {
     const result = quality({
-      name: '[RD+] Torrentio\n4k HDR',
+      name: '[AB+] Example\n4k HDR',
       title:
-        'Dune.Part.Two.2024.UHD.BluRay.2160p.TrueHD.Atmos.7.1.HEVC.REMUX-FraMeSToR\n👤 51 💾 72.1 GB ⚙️ RARBG',
+        'Sample.Film.2024.UHD.BluRay.2160p.TrueHD.Atmos.7.1.HEVC.REMUX-GROUP\n👤 51 💾 72.1 GB ⚙️ Example',
     });
     assert.equal(result.resolution, 2160);
     assert.equal(result.source, 'remux');
@@ -76,10 +76,10 @@ describe('parseStreamQuality: real-world streams', () => {
     assert.equal(result.size, 72_100_000_000);
   });
 
-  it('reads a Comet stream with a lightning marker', () => {
+  it('reads a stream with a lightning marker', () => {
     const result = quality({
-      name: '[TB⚡] Comet 1080p',
-      description: 'Dune: Part Two (2024) 1080p WEBRip x265 10bit AAC 5.1\n💾 3.2 GB 🔎 Jackett',
+      name: '[XY⚡] Example 1080p',
+      description: 'Sample Film (2024) 1080p WEBRip x265 10bit AAC 5.1\n💾 3.2 GB 🔎 Example',
     });
     assert.equal(result.cached, true);
     assert.equal(result.resolution, 1080);
@@ -88,10 +88,10 @@ describe('parseStreamQuality: real-world streams', () => {
     assert.equal(result.channels, '5.1');
   });
 
-  it('reads an uncached MediaFusion cam', () => {
+  it('reads an uncached cam with an hourglass marker', () => {
     const result = quality({
-      name: 'MediaFusion | TB ⏳ 720p',
-      description: '📂 Dune.Part.Two.2024.720p.HDCAM.x264\n💾 1.4 GB 👤 12\n🔗 TorrentGalaxy',
+      name: 'Example | XY ⏳ 720p',
+      description: '📂 Sample.Film.2024.720p.HDCAM.x264\n💾 1.4 GB 👤 12\n🔗 Example',
     });
     assert.equal(result.cached, false);
     assert.equal(result.resolution, 720);
@@ -99,11 +99,11 @@ describe('parseStreamQuality: real-world streams', () => {
     assert.equal(result.size, 1_400_000_000);
   });
 
-  it('reads a TorBox stream with labelled fields', () => {
+  it('reads a stream with labelled fields', () => {
     const result = quality({
-      name: 'TorBox ⚡\n4K',
+      name: 'Example ⚡\n4K',
       description:
-        'Dune.Part.Two.2024.2160p.AMZN.WEB-DL.DDP5.1.H.265\nSize: 21.5 GB | Seeders: 120\nLanguage: English | Cached: Yes',
+        'Sample.Film.2024.2160p.AMZN.WEB-DL.DDP5.1.H.265\nSize: 21.5 GB | Seeders: 120\nLanguage: English | Cached: Yes',
     });
     assert.equal(result.cached, true);
     assert.equal(result.resolution, 2160);
@@ -142,7 +142,7 @@ describe('parseStreamQuality: leniency', () => {
   });
 
   it('does not mistake look-alike tokens', () => {
-    const result = quality({ title: 'Movie.2019.HDRip.XviD.AC3-EVO DVDRip SDR' });
+    const result = quality({ title: 'Movie.2019.HDRip.XviD.AC3-GROUP DVDRip SDR' });
     assert.equal(result.hdr, false);
     assert.equal(result.dolbyVision, false);
     assert.equal(result.codec, 'xvid');
@@ -177,14 +177,14 @@ describe('parseStreamQuality: leniency', () => {
   });
 
   it('reads cached and uncached markers, uncached first', () => {
-    assert.equal(quality({ name: '[RD+] Torrentio' }).cached, true);
-    assert.equal(quality({ name: '[AD download] Torrentio' }).cached, false);
+    assert.equal(quality({ name: '[AB+] Example' }).cached, true);
+    assert.equal(quality({ name: '[CD download] Example' }).cached, false);
     assert.equal(quality({ description: 'Instant' }).cached, true);
-    assert.equal(quality({ description: 'Cached on TorBox' }).cached, true);
+    assert.equal(quality({ description: 'Cached on Example' }).cached, true);
     assert.equal(quality({ description: 'Uncached' }).cached, false);
     assert.equal(quality({ description: 'Not cached' }).cached, false);
     assert.equal(quality({ description: 'Cached: No' }).cached, false);
-    assert.equal(quality({ name: 'Comet [TB⬇️]' }).cached, false);
+    assert.equal(quality({ name: 'Example [XY⬇️]' }).cached, false);
     assert.equal(quality({ name: 'Plain' }).cached, undefined);
   });
 

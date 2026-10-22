@@ -12,6 +12,9 @@
 //! It starts as the one used last. A profile can have a 4-digit [`Pin`] that
 //! locks switching into it: a convenience lock, not security.
 //!
+//! Each profile also records whether it has been through the first-run setup
+//! ([`FirstRun`], `migrations/0003_first_run.sql`).
+//!
 //! Settings files: the first profile keeps `settings.json` in the config
 //! directory, where it was before profiles, so an older file is the first
 //! profile's unchanged. Every other profile has
@@ -155,6 +158,53 @@ impl TryFrom<String> for Avatar {
     }
 }
 
+/// Where a profile is with the first-run setup (docs/first-run.md). It shows
+/// while `Pending`, and never again once completed or skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FirstRun {
+    Pending,
+    Completed,
+    Skipped,
+}
+
+impl FirstRun {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Skipped => "skipped",
+        }
+    }
+
+    /// The stored value; anything unknown reads as done, so a damaged row
+    /// never keeps showing the setup.
+    fn from_stored(value: &str) -> Self {
+        match value {
+            "pending" => Self::Pending,
+            "skipped" => Self::Skipped,
+            _ => Self::Completed,
+        }
+    }
+}
+
+/// How the first-run setup ended: the only values the renderer may record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FirstRunOutcome {
+    Completed,
+    Skipped,
+}
+
+impl From<FirstRunOutcome> for FirstRun {
+    fn from(outcome: FirstRunOutcome) -> Self {
+        match outcome {
+            FirstRunOutcome::Completed => Self::Completed,
+            FirstRunOutcome::Skipped => Self::Skipped,
+        }
+    }
+}
+
 /// A profile as the renderer sees it: never its PIN hash.
 ///
 /// Mirrored by `Profile` in `apps/desktop/src/services/native.ts`.
@@ -168,6 +218,7 @@ pub struct Profile {
     pub has_pin: bool,
     /// Unix milliseconds.
     pub created_at: i64,
+    pub first_run: FirstRun,
 }
 
 /// Every profile, oldest first, and which is active.
@@ -455,6 +506,19 @@ impl Profiles {
         Ok(overview)
     }
 
+    /// Records how the active profile's first-run setup ended, so it doesn't
+    /// show again for it.
+    pub fn finish_first_run(&self, outcome: FirstRunOutcome) -> Result<ProfilesOverview> {
+        let active = self.active()?;
+        self.database.with(|connection| {
+            connection.execute(
+                "UPDATE profiles SET first_run = ?1 WHERE id = ?2",
+                params![FirstRun::from(outcome).as_str(), active.0],
+            )?;
+            overview(connection, active)
+        })
+    }
+
     /// Whether "Who's watching?" shows at launch.
     pub fn set_show_picker(&self, show: bool) -> Result<ProfilesOverview> {
         let active = self.active()?;
@@ -467,7 +531,8 @@ impl Profiles {
 
 fn list(connection: &Connection) -> Result<Vec<Profile>> {
     let mut statement = connection.prepare(
-        "SELECT id, name, avatar, pin_hash IS NOT NULL, created_at FROM profiles ORDER BY id",
+        "SELECT id, name, avatar, pin_hash IS NOT NULL, created_at, first_run
+         FROM profiles ORDER BY id",
     )?;
     let profiles = statement
         .query_map([], |row| {
@@ -477,6 +542,7 @@ fn list(connection: &Connection) -> Result<Vec<Profile>> {
                 avatar: row.get(2)?,
                 has_pin: row.get(3)?,
                 created_at: row.get(4)?,
+                first_run: FirstRun::from_stored(&row.get::<_, String>(5)?),
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -1005,6 +1071,46 @@ mod tests {
     }
 
     #[test]
+    fn first_run_is_per_profile_and_stays_finished() {
+        let fixture = Fixture::new();
+        let first_run = |overview: &ProfilesOverview| -> Vec<FirstRun> {
+            overview.profiles.iter().map(|p| p.first_run).collect()
+        };
+        assert_eq!(
+            first_run(&fixture.profiles.overview().unwrap()),
+            [FirstRun::Pending]
+        );
+
+        let sam = fixture.create("Sam");
+        let overview = fixture
+            .profiles
+            .finish_first_run(FirstRunOutcome::Skipped)
+            .unwrap();
+        // Only the active profile's changes; a new one starts pending.
+        assert_eq!(first_run(&overview), [FirstRun::Skipped, FirstRun::Pending]);
+
+        fixture.profiles.switch(sam, None).unwrap();
+        fixture
+            .profiles
+            .finish_first_run(FirstRunOutcome::Completed)
+            .unwrap();
+        assert_eq!(
+            first_run(&fixture.relaunch().overview().unwrap()),
+            [FirstRun::Skipped, FirstRun::Completed]
+        );
+    }
+
+    #[test]
+    fn only_completed_or_skipped_can_be_recorded() {
+        for valid in ["completed", "skipped"] {
+            assert!(serde_json::from_value::<FirstRunOutcome>(json!(valid)).is_ok());
+        }
+        for invalid in [json!("pending"), json!("done"), json!(1), json!(null)] {
+            assert!(serde_json::from_value::<FirstRunOutcome>(invalid).is_err());
+        }
+    }
+
+    #[test]
     fn serializes_without_the_pin() {
         let fixture = Fixture::new();
         fixture.create_with_pin("Sam", Some("9999"));
@@ -1017,6 +1123,7 @@ mod tests {
                 "avatar": "teal",
                 "hasPin": true,
                 "createdAt": json["profiles"][1]["createdAt"],
+                "firstRun": "pending",
             })
         );
         assert_eq!(json["active"], 1);

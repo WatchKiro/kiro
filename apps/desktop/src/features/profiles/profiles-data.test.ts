@@ -15,7 +15,7 @@ import {
 import type { Profile, ProfilesOverview } from '@/services/native';
 
 function profile(id: number, name: string, extra: Partial<Profile> = {}): Profile {
-  return { id, name, avatar: 'violet', hasPin: false, createdAt: 0, ...extra };
+  return { id, name, avatar: 'violet', hasPin: false, createdAt: 0, firstRun: 'pending', ...extra };
 }
 
 function overview(profiles: Profile[], extra: Partial<ProfilesOverview> = {}): ProfilesOverview {
@@ -98,13 +98,18 @@ describe('avatars and PINs', () => {
   it('checks what the core returns', () => {
     const parsed = parseOverview({
       profiles: [
-        { id: 1, name: 'Me', avatar: 'gold', hasPin: 'yes', createdAt: 5 },
+        { id: 1, name: 'Me', avatar: 'gold', hasPin: 'yes', createdAt: 5, firstRun: 'pending' },
+        { id: 3, name: 'Sam', avatar: 'teal', hasPin: true, createdAt: 6, firstRun: 'later' },
         { id: 'x', name: 2 },
       ],
       active: 1,
     });
     assert.deepEqual(parsed, {
-      profiles: [{ id: 1, name: 'Me', avatar: 'violet', hasPin: false, createdAt: 5 }],
+      profiles: [
+        { id: 1, name: 'Me', avatar: 'violet', hasPin: false, createdAt: 5, firstRun: 'pending' },
+        // An unknown first-run state counts as done, as in the core.
+        { id: 3, name: 'Sam', avatar: 'teal', hasPin: true, createdAt: 6, firstRun: 'completed' },
+      ],
       active: 1,
       showPicker: true,
     });

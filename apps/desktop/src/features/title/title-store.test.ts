@@ -34,9 +34,9 @@ function addon(name: string, resources: unknown[], idPrefixes?: string[]): Insta
 const META = addon('Meta', ['meta'], ['tt']);
 const BACKUP = addon('Backup', ['meta']);
 const STREAMS = addon('Streams', ['stream'], ['tt']);
-const TORRENTS = addon('Torrents', [{ name: 'stream', types: ['movie'] }]);
+const MOVIES = addon('Movies', [{ name: 'stream', types: ['movie'] }]);
 const OTHER = addon('Other', ['stream'], ['kitsu:']);
-const ADDONS = [META, BACKUP, STREAMS, TORRENTS, OTHER];
+const ADDONS = [META, BACKUP, STREAMS, MOVIES, OTHER];
 
 type Handler = () => Promise<unknown>;
 
@@ -124,7 +124,7 @@ describe('title store', () => {
       Promise.resolve({ streams: [{ url: 'https://cdn.example/a.mp4' }, { name: 'no source' }] }),
     );
     fake.on(
-      TORRENTS,
+      MOVIES,
       'stream',
       () =>
         new Promise((resolve) => {
@@ -137,19 +137,19 @@ describe('title store', () => {
     // Both requests are in flight before either finishes; OTHER (kitsu:) is skipped.
     assert.deepEqual(
       fake.calls.map(([url]) => url),
-      [STREAMS.transportUrl, TORRENTS.transportUrl],
+      [STREAMS.transportUrl, MOVIES.transportUrl],
     );
     await new Promise((resolve) => setImmediate(resolve));
     const streams = () => store.getState().streams;
     const ready = streams()[streamsKey(STREAMS.transportUrl, 'movie', 'tt1')];
     assert.equal(ready?.status === 'ready' && ready.streams.length, 1);
-    assert.equal(streams()[streamsKey(TORRENTS.transportUrl, 'movie', 'tt1')]?.status, 'loading');
+    assert.equal(streams()[streamsKey(MOVIES.transportUrl, 'movie', 'tt1')]?.status, 'loading');
 
     release?.();
     await pending;
-    assert.equal(streams()[streamsKey(TORRENTS.transportUrl, 'movie', 'tt1')]?.status, 'ready');
+    assert.equal(streams()[streamsKey(MOVIES.transportUrl, 'movie', 'tt1')]?.status, 'ready');
 
-    // Episodes are requested by video id; TORRENTS only serves movies.
+    // Episodes are requested by video id; MOVIES only serves movies.
     await store.getState().loadStreams(ADDONS, 'series', 'tt2:1:1');
     assert.deepEqual(fake.calls.at(-1), [
       STREAMS.transportUrl,
@@ -165,11 +165,11 @@ describe('title store', () => {
     const entry = (target: InstalledAddon) =>
       store.getState().streams[streamsKey(target.transportUrl, 'movie', 'tt1')];
     assert.equal(entry(STREAMS)?.status, 'error');
-    assert.deepEqual(entry(TORRENTS), { status: 'error', message: 'Unreachable' });
+    assert.deepEqual(entry(MOVIES), { status: 'error', message: 'Unreachable' });
 
-    fake.on(TORRENTS, 'stream', () => Promise.resolve({ streams: [] }));
-    await store.getState().loadAddonStreams(TORRENTS, 'movie', 'tt1', { force: true });
-    assert.deepEqual(entry(TORRENTS), { status: 'ready', streams: [] });
+    fake.on(MOVIES, 'stream', () => Promise.resolve({ streams: [] }));
+    await store.getState().loadAddonStreams(MOVIES, 'movie', 'tt1', { force: true });
+    assert.deepEqual(entry(MOVIES), { status: 'ready', streams: [] });
     assert.equal(entry(STREAMS)?.status, 'error');
   });
 });

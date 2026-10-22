@@ -107,6 +107,7 @@ fn main() {
             "profile_delete",
             "profile_switch",
             "profile_set_show_picker",
+            "profile_finish_first_run",
             "skip_times_lookup",
             "stremio_import_fetch",
             "stremio_import_library",

@@ -17,11 +17,12 @@ function commandError(code: string, message: string) {
 
 /** The core's profile rules, in memory: PINs, the active profile, the last one. */
 function fakeBackend(profiles: (Partial<Profile> & { pin?: string })[], showPicker = true) {
-  let list = profiles.map((profile, index) => ({
+  let list = profiles.map((profile, index): Profile & { pin?: string } => ({
     id: index + 1,
     name: `Profile ${index + 1}`,
     avatar: 'violet',
     createdAt: 0,
+    firstRun: 'pending',
     ...profile,
     hasPin: Boolean(profile.pin),
   }));
@@ -44,7 +45,15 @@ function fakeBackend(profiles: (Partial<Profile> & { pin?: string })[], showPick
       calls.push(`create ${name}`);
       list = [
         ...list,
-        { id: list.length + 1, name, avatar, createdAt: 0, hasPin: pin !== null, pin: pin ?? '' },
+        {
+          id: list.length + 1,
+          name,
+          avatar,
+          createdAt: 0,
+          firstRun: 'pending',
+          hasPin: pin !== null,
+          pin: pin ?? '',
+        },
       ];
       return Promise.resolve(view());
     },
@@ -76,6 +85,11 @@ function fakeBackend(profiles: (Partial<Profile> & { pin?: string })[], showPick
     },
     setShowPicker: (show) => {
       showPicker = show;
+      return Promise.resolve(view());
+    },
+    finishFirstRun: (outcome) => {
+      calls.push(`finish ${outcome}`);
+      list = list.map((p) => (p.id === active ? { ...p, firstRun: outcome } : p));
       return Promise.resolve(view());
     },
   };
@@ -193,11 +207,42 @@ describe('profiles store', () => {
       avatar: 'rose',
       hasPin: false,
       createdAt: 0,
+      firstRun: 'pending',
     });
     await store.getState().setShowPicker(false);
     assert.equal(store.getState().overview?.showPicker, false);
     await store.getState().remove(2);
     assert.equal(store.getState().overview?.profiles.length, 1);
+  });
+});
+
+describe('the first-run setup', () => {
+  const firstRuns = (store: ReturnType<typeof createProfilesStore>) =>
+    store.getState().overview?.profiles.map((profile) => profile.firstRun);
+
+  it('is recorded for the active profile only', async () => {
+    const { backend } = fakeBackend([{ name: 'Me' }, { name: 'Sam' }]);
+    const store = createProfilesStore(backend, countingHooks());
+    await store.getState().load();
+    assert.deepEqual(firstRuns(store), ['pending', 'pending']);
+
+    await store.getState().finishFirstRun('skipped');
+    assert.deepEqual(firstRuns(store), ['skipped', 'pending']);
+
+    await store.getState().switchTo(2);
+    await store.getState().finishFirstRun('completed');
+    assert.deepEqual(firstRuns(store), ['skipped', 'completed']);
+  });
+
+  it('stays as it ended when the setup is opened again', async () => {
+    const { backend, calls } = fakeBackend([{ name: 'Me' }]);
+    const store = createProfilesStore(backend, countingHooks());
+    await store.getState().load();
+    await store.getState().finishFirstRun('completed');
+    // Reopened from Settings and closed with Skip: still completed.
+    await store.getState().finishFirstRun('skipped');
+    assert.deepEqual(firstRuns(store), ['completed']);
+    assert.deepEqual(calls, ['finish completed']);
   });
 });
 

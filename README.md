@@ -401,6 +401,10 @@ Discover, Movies and TV Shows show the enabled addons' catalogues as rows that l
 
 People sharing a computer each get their own profile: their own watchlist, history, Continue watching and settings, picked on a "Who’s watching?" screen at launch, with an optional 4-digit PIN (a convenience lock, not security). Addons are shared. The library tables are keyed by profile and each profile has its own settings file; commands act on the active profile. See [docs/profiles.md](docs/profiles.md).
 
+### First-run setup
+
+A new install can browse (Cinemeta, OpenSubtitles) but has nothing to play until the user adds an addon that provides streams. A first-run welcome says so and offers adding an addon by its link or importing from Stremio; it is skippable, recorded per profile, and opens again from Settings → Addons. Kiro recommends no stream sources. See [docs/first-run.md](docs/first-run.md).
+
 ### Routing and performance
 
 React Router (data router). Discover is bundled eagerly as the start screen; every other section is a lazy route chunk. Fonts are the operating system's own, so nothing is downloaded at startup and the app works offline.

@@ -37,7 +37,7 @@
           "id": "org.stremio.local",
           "version": "1.10.0",
           "name": "Local Files",
-          "description": "Local add-on to find playable files: .torrent, .mp4, .mkv and .avi",
+          "description": "Local add-on to find playable files: .mp4, .mkv and .avi",
           "resources": [
             { "name": "meta", "types": ["other"], "idPrefixes": ["local:", "bt:"] },
             "stream"

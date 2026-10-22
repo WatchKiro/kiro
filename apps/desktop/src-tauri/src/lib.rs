@@ -99,6 +99,7 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             commands::profiles::profile_delete,
             commands::profiles::profile_switch,
             commands::profiles::profile_set_show_picker,
+            commands::profiles::profile_finish_first_run,
             commands::skip_times::skip_times_lookup,
             commands::stremio::stremio_import_fetch,
             commands::stremio::stremio_import_library,
@@ -158,6 +159,7 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::profiles::profile_delete,
         commands::profiles::profile_switch,
         commands::profiles::profile_set_show_picker,
+        commands::profiles::profile_finish_first_run,
         commands::skip_times::skip_times_lookup,
         commands::stremio::stremio_import_fetch,
         commands::stremio::stremio_import_library,
@@ -796,7 +798,7 @@ mod tests {
         settings["subtitles"]["edge"] = json!("background");
         settings["streams"]["maxResolution"] = json!(1080);
         settings["streams"]["avoidCodecs"] = json!(["av1"]);
-        settings["streams"]["excludedKeywords"] = json!(["YIFY"]);
+        settings["streams"]["excludedKeywords"] = json!(["GROUP"]);
         settings["rows"]["discover"] = json!([
             { "addon": "community.anime.kitsu", "type": "anime", "catalog": "kitsu-anime-airing", "hidden": true },
         ]);
@@ -926,6 +928,8 @@ mod tests {
             ("profile_switch", json!({ "id": 42 })),
             ("profile_delete", json!({ "id": 1 })),
             ("profile_set_show_picker", json!({ "show": "yes" })),
+            ("profile_finish_first_run", json!({ "outcome": "pending" })),
+            ("profile_finish_first_run", json!({})),
         ] {
             fails(cmd, args);
         }
@@ -1005,6 +1009,12 @@ mod tests {
         call("profile_set_pin", json!({ "id": 1, "newPin": "0000" }));
         let overview = call("profile_set_show_picker", json!({ "show": false }));
         assert_eq!(overview["showPicker"], false);
+
+        // The first-run setup is recorded for the active profile only.
+        assert_eq!(overview["profiles"][0]["firstRun"], "pending");
+        let overview = call("profile_finish_first_run", json!({ "outcome": "skipped" }));
+        assert_eq!(overview["profiles"][0]["firstRun"], "skipped");
+        assert_eq!(overview["profiles"][1]["firstRun"], "pending");
         assert_eq!(overview["profiles"][0]["avatar"], "amber");
         assert_eq!(overview["profiles"][0]["hasPin"], true);
 
