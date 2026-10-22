@@ -185,6 +185,19 @@ export function PlaybackSection() {
           onChange={(keepScreenOn) => void updatePlayback({ keepScreenOn })}
           onReset={resetOf('keepScreenOn')}
         />
+        <ToggleSetting
+          id="seek-previews"
+          label="Seek bar previews"
+          hint={
+            playback.seekPreviews
+              ? 'Hovering over the seek bar shows a frame from that point. Each one downloads a little of the stream (about 0.3 MB for HD, 1 MB for 4K), and none are fetched while the video is short of buffered data.'
+              : 'Hovering over the seek bar shows only the time.'
+          }
+          checked={playback.seekPreviews}
+          disabled={disabled}
+          onChange={(seekPreviews) => void updatePlayback({ seekPreviews })}
+          onReset={resetOf('seekPreviews')}
+        />
       </Group>
     </Section>
   );

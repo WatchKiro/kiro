@@ -133,6 +133,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionInfo[] = [
         'rememberVolume',
         'volume',
         'keepScreenOn',
+        'seekPreviews',
       ],
     },
     settings: [
@@ -170,6 +171,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionInfo[] = [
         'screensaver',
         'display',
         'awake',
+      ]),
+      setting('seek-previews', 'Seek bar previews', 'Player', [
+        'thumbnails',
+        'scrubbing',
+        'frame',
+        'hover',
       ]),
     ],
   },
