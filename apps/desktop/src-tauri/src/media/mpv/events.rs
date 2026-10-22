@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use super::client::{self, Event, Format, Mpv, PropertyData};
 use super::ffi::error as mpv_error;
-use super::{RenderStats, Shared, debug_log_enabled, debug_stats, mpv_error_message};
+use super::{RenderStats, Shared, debug_log_enabled, debug_stats, mpv_error_message, player_log};
 use crate::media::model::{Change, FailureCode, PlayerFailure};
 use crate::media::passthrough::FALLBACK_MESSAGE;
 
@@ -110,7 +110,14 @@ fn run(mpv: &Mpv, shared: &Shared, stats: &RenderStats, stop: &AtomicBool) {
         if log && last_stats_log.elapsed() >= STATS_LOG_INTERVAL {
             last_stats_log = Instant::now();
             let state = shared.model().state();
-            eprintln!("[kiro-player] {state:?} {:?}", debug_stats(mpv, stats));
+            let kb = |name: &str| mpv.get_property::<i64>(name).unwrap_or(0) / 1024;
+            player_log!(
+                "[kiro-player] {state:?} cache {} KB ahead / {} KB held, {} KB/s in; {:?}",
+                kb("demuxer-cache-state/fw-bytes"),
+                kb("demuxer-cache-state/total-bytes"),
+                kb("cache-speed"),
+                debug_stats(mpv, stats)
+            );
         }
     }
 }
@@ -134,7 +141,7 @@ fn passthrough_refused(mpv: &Mpv, shared: &Shared) {
     let now = mpv
         .get_property::<String>("audio-spdif")
         .unwrap_or_default();
-    eprintln!(
+    player_log!(
         "[kiro-player] audio passthrough: the audio output refused {codec}, decoding it \
          (passing through: {}){}",
         if now.is_empty() { "nothing" } else { &now },

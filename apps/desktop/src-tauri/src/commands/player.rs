@@ -17,7 +17,8 @@ use crate::core::error::{Error, Result};
 use crate::core::state::AppState;
 use crate::media::model::{MediaTrack, PlayerEvent, PlayerSnapshot};
 use crate::media::mpv::{
-    DebugStats, EventSink, MpvPlayer, PreviewKind, PreviewResult, debug_log_enabled,
+    DebugStats, EventSink, MpvPlayer, PreviewKind, PreviewResult, debug_log_enabled, player_log,
+    redacted_url,
 };
 use crate::media::{
     ExternalSubtitle, MediaSource, PlaybackBackend, PlaybackError, SubtitleStyle, audio_delay,
@@ -148,8 +149,8 @@ fn logged<T: std::fmt::Debug>(
 ) -> Result<T> {
     if debug_log_enabled() {
         match &result {
-            Ok(value) => eprintln!("[kiro-player] {command}({args}) -> {value:?}"),
-            Err(error) => eprintln!(
+            Ok(value) => player_log!("[kiro-player] {command}({args}) -> {value:?}"),
+            Err(error) => player_log!(
                 "[kiro-player] {command}({args}) -> {} {error}",
                 error.code()
             ),
@@ -259,7 +260,7 @@ pub fn player_load(
     })();
     logged(
         "player_load",
-        format_args!("{url:?}, {start_position:?}"),
+        format_args!("{}, {start_position:?}", redacted_url(&url)),
         result,
     )
 }
@@ -407,7 +408,11 @@ pub async fn player_add_subtitle(
             Ok(player) => blocking(move || Ok(player.add_external_subtitle(&subtitle)?)).await,
         },
     };
-    logged("player_add_subtitle", format_args!("{url:?}"), result)
+    logged(
+        "player_add_subtitle",
+        format_args!("{}", redacted_url(&url)),
+        result,
+    )
 }
 
 /// Changes how subtitles look (Settings → Subtitles). Kept by mpv for the
@@ -509,7 +514,7 @@ pub async fn player_preview(
             }
             other => format!("{other:?}"),
         };
-        eprintln!("[kiro-player] player_preview({position:.1}, {kind:?}) -> {status}");
+        player_log!("[kiro-player] player_preview({position:.1}, {kind:?}) -> {status}");
     }
     result
 }

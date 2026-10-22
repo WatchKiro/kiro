@@ -26,9 +26,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::client::{self, Event, Mpv};
-use super::debug_log_enabled;
 use super::ffi::error as mpv_error;
 use super::preview_reader::{self, OpeningCache, ReaderContext};
+use super::{debug_log_enabled, player_log, redacted_url};
 
 /// Frees the preview core after this long without a request.
 const IDLE_RELEASE: Duration = Duration::from_secs(60);
@@ -237,7 +237,7 @@ impl Worker {
                     if waited >= IDLE_RELEASE {
                         if let Some(core) = self.core.take() {
                             if debug_log_enabled() {
-                                eprintln!("[kiro-preview] idle: preview core released");
+                                player_log!("[kiro-preview] idle: preview core released");
                             }
                             // Freed outside the lock.
                             drop(queue);
@@ -326,13 +326,17 @@ impl Worker {
                 self.failed = None;
                 self.failures = 0;
                 if debug_log_enabled() {
-                    eprintln!("[kiro-preview] opened in {:?}", started.elapsed());
+                    player_log!(
+                        "[kiro-preview] opened {} in {:?}",
+                        redacted_url(source),
+                        started.elapsed()
+                    );
                 }
                 self.core = Some(core);
                 true
             }
             Err(error) => {
-                eprintln!("[kiro-preview] could not open the stream: {error}");
+                player_log!("[kiro-preview] could not open the stream: {error}");
                 self.core = None;
                 self.failed = Some(source.to_owned());
                 false
@@ -374,7 +378,7 @@ impl Worker {
                         ),
                         _ => "read by mpv".into(),
                     };
-                    eprintln!(
+                    player_log!(
                         "[kiro-preview] frame at {:.1}s (asked {position:.1}s) in {:?}, {} byte JPEG, {read}",
                         frame.position,
                         asked.elapsed(),
@@ -384,7 +388,7 @@ impl Worker {
                 Outcome::Frame(frame)
             }
             Err(error) => {
-                eprintln!("[kiro-preview] no frame at {position:.1}s: {error}");
+                player_log!("[kiro-preview] no frame at {position:.1}s: {error}");
                 // An event may still be on its way; start afresh next time,
                 // but not over and over.
                 self.core = None;
@@ -410,7 +414,7 @@ impl Worker {
                 Ok(core) => return Ok(core),
                 Err(error @ (Failure::Stopped | Failure::NoRanges)) => return Err(error),
                 Err(error) => {
-                    eprintln!(
+                    player_log!(
                         "[kiro-preview] bounded reads failed ({error}): mpv reads the stream"
                     );
                 }
@@ -451,7 +455,7 @@ impl Worker {
         if let Some(reader) = &reader {
             reader.opened();
             if debug_log_enabled() {
-                eprintln!(
+                player_log!(
                     "[kiro-preview] opening read {} KB ({} KB kept for next time)",
                     reader.bytes_read() / 1024,
                     self.opening
@@ -477,7 +481,7 @@ impl Worker {
             let dir =
                 std::env::temp_dir().join(format!("kiro-previews-{}-{id}", std::process::id()));
             if let Err(error) = create_private_dir(&dir) {
-                eprintln!("[kiro-preview] no folder for frames: {error}");
+                player_log!("[kiro-preview] no folder for frames: {error}");
                 return None;
             }
             self.dir = Some(dir);

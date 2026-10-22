@@ -31,13 +31,14 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use url::Url;
 
 use super::client::{self, Mpv};
 use super::ffi;
 use super::ffi::error as mpv_error;
+use super::{debug_log_enabled, player_log};
 use crate::media::parse_stream_url;
 
 /// The protocol the preview core opens wrapped URLs with.
@@ -293,13 +294,34 @@ impl Reader {
         let client = self.context().client.clone();
         let url = self.url.clone();
         let cancelled = &self.cancelled;
+        let log = debug_log_enabled();
+        let asked = Instant::now();
         let result = tauri::async_runtime::block_on(async move {
             let mut response = client
-                .get(url)
+                .get(url.clone())
                 .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
                 .send()
                 .await
                 .map_err(|_| ReadError::Network)?;
+            if log {
+                // Where the range came from, and how long the first byte took:
+                // a host that redirects each range costs a round trip more.
+                let redirected = response.url().host_str() != url.host_str();
+                player_log!(
+                    "[kiro-reader] bytes {start}-{end} ({} KB): {} after {:?}{}",
+                    len / 1024,
+                    response.status().as_u16(),
+                    asked.elapsed(),
+                    if redirected {
+                        format!(
+                            ", redirected to {}",
+                            response.url().host_str().unwrap_or("-")
+                        )
+                    } else {
+                        String::new()
+                    }
+                );
+            }
             let total = match response.status().as_u16() {
                 206 => response
                     .headers()
@@ -327,6 +349,13 @@ impl Reader {
             self.context().refused.store(true, Ordering::Relaxed);
         }
         let (body, total) = result?;
+        if log {
+            player_log!(
+                "[kiro-reader] bytes {start}-{end}: {} KB in {:?}",
+                body.len() / 1024,
+                asked.elapsed()
+            );
+        }
         let context = self.context();
         context
             .bytes

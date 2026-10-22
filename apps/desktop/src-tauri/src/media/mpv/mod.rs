@@ -83,6 +83,51 @@ pub(crate) fn debug_log_enabled() -> bool {
     std::env::var_os("KIRO_SPIKE_LOG").is_some()
 }
 
+/// Seconds since the first log line, so timings can be read off the log.
+pub(crate) fn log_elapsed() -> f64 {
+    static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    STARTED
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
+
+/// A line of the player's log on stderr, stamped with the seconds since the
+/// first (`+12.345`). Used where `eprintln!` would be; the callers decide
+/// whether the line is debug-only ([`debug_log_enabled`]).
+macro_rules! player_log {
+    ($($arg:tt)*) => {
+        eprintln!("+{:.3} {}", $crate::media::mpv::log_elapsed(), format_args!($($arg)*))
+    };
+}
+pub(crate) use player_log;
+
+/// A stream URL as the log shows it: the host and the file's name, without
+/// the path (which can carry an account key) or the query (a signed token).
+pub(crate) fn redacted_url(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return "<unparsable url>".into();
+    };
+    let host = parsed.host_str().unwrap_or("-");
+    let name = parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("");
+    let depth = parsed.path_segments().map_or(0, |segments| {
+        segments
+            .filter(|segment| !segment.is_empty())
+            .count()
+            .saturating_sub(1)
+    });
+    let hidden = if depth > 0 {
+        format!("/…{depth}/")
+    } else {
+        "/".into()
+    };
+    format!("{}://{host}{hidden}{name}", parsed.scheme())
+}
+
 /// Human-readable message for an mpv error, for the renderer.
 fn mpv_error_message(error: &client::Error) -> &'static str {
     match error {
@@ -105,7 +150,7 @@ fn mpv_error_message(error: &client::Error) -> &'static str {
 
 fn backend_error(error: client::Error) -> PlaybackError {
     if debug_log_enabled() {
-        eprintln!("[kiro-player] mpv error: {error:?}");
+        player_log!("[kiro-player] mpv error: {error:?}");
     }
     PlaybackError::Backend(mpv_error_message(&error).to_owned())
 }
@@ -250,7 +295,7 @@ impl Shared {
         let sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
         for event in events {
             if debug_log_enabled() && !matches!(event, PlayerEvent::TimeUpdate { .. }) {
-                eprintln!(
+                player_log!(
                     "[kiro-player] event {}",
                     serde_json::to_string(&event).unwrap_or_default()
                 );
@@ -265,10 +310,10 @@ impl Shared {
 fn log_keep_awake(transition: Option<Transition>, state: PlaybackState) {
     match transition {
         Some(Transition::Failed(error)) => {
-            eprintln!("[kiro-player] could not keep the display awake: {error}");
+            player_log!("[kiro-player] could not keep the display awake: {error}");
         }
         Some(transition) if debug_log_enabled() => {
-            eprintln!("[kiro-player] keep awake: {transition:?} ({state:?})");
+            player_log!("[kiro-player] keep awake: {transition:?} ({state:?})");
         }
         _ => {}
     }
@@ -442,7 +487,7 @@ impl MpvPlayer {
                 .mpv
                 .get_property::<String>("stop-screensaver")
                 .unwrap_or_default();
-            eprintln!("[kiro-player] keep screen on: {on} (stop-screensaver = {mpv_value})");
+            player_log!("[kiro-player] keep screen on: {on} (stop-screensaver = {mpv_value})");
         }
         events::wake(&self.mpv);
     }
@@ -461,10 +506,10 @@ impl MpvPlayer {
         if debug_log_enabled() {
             match result {
                 Ok(codecs) if codecs.is_empty() => {
-                    eprintln!("[kiro-player] audio passthrough: off")
+                    player_log!("[kiro-player] audio passthrough: off")
                 }
-                Ok(codecs) => eprintln!("[kiro-player] audio passthrough: {codecs}"),
-                Err(error) => eprintln!("[kiro-player] audio passthrough failed: {error:?}"),
+                Ok(codecs) => player_log!("[kiro-player] audio passthrough: {codecs}"),
+                Err(error) => player_log!("[kiro-player] audio passthrough failed: {error:?}"),
             }
         }
     }
@@ -531,7 +576,7 @@ impl MpvPlayer {
         let buffer = self.buffer_state();
         if preview::could_stall_playback(&buffer, demand) {
             if debug_log_enabled() {
-                eprintln!(
+                player_log!(
                     "[kiro-preview] busy: {:.1} s buffered, {} KB/s in, {} KB/s played",
                     buffer.cached_seconds.unwrap_or(0.0),
                     buffer.input_rate.map_or(0.0, |rate| rate / 1024.0).round(),
@@ -608,7 +653,7 @@ impl Drop for MpvPlayer {
         // 4. `self.mpv` is now the last reference: dropping it destroys the core.
         debug_assert_eq!(Arc::strong_count(&self.mpv), 1);
         if debug_log_enabled() {
-            eprintln!("[kiro-player] player released");
+            player_log!("[kiro-player] player released");
         }
     }
 }
@@ -684,6 +729,34 @@ impl PlaybackBackend for MpvPlayer {
     }
 
     fn seek(&self, seconds: f64) -> Result<(), PlaybackError> {
+        if debug_log_enabled() {
+            // Whether the player holds the target, so the log can tell a
+            // seek served from the cache from one that reads the stream.
+            let snapshot = self.shared.model().snapshot();
+            let held = snapshot
+                .buffered
+                .iter()
+                .any(|range| (range.start..=range.end).contains(&seconds));
+            let fw = self
+                .mpv
+                .get_property::<i64>("demuxer-cache-state/fw-bytes")
+                .unwrap_or(0);
+            let total = self
+                .mpv
+                .get_property::<i64>("demuxer-cache-state/total-bytes")
+                .unwrap_or(0);
+            player_log!(
+                "[kiro-player] seek {seconds:.1}s from {:.1}s: {} (cache {} KB ahead, {} KB held)",
+                snapshot.position,
+                if held {
+                    "in the buffer"
+                } else {
+                    "reads the stream"
+                },
+                fw / 1024,
+                total / 1024,
+            );
+        }
         self.mpv
             .command("seek", &[&seconds.to_string(), "absolute"])
             .map_err(backend_error)
@@ -788,7 +861,7 @@ impl PlaybackBackend for MpvPlayer {
             if debug_log_enabled() {
                 // Read back what mpv now holds, to check it took the value.
                 let applied = self.mpv.get_property::<String>(name).unwrap_or_default();
-                eprintln!("[kiro-player] {name} = {applied} (set {value})");
+                player_log!("[kiro-player] {name} = {applied} (set {value})");
             }
         }
         Ok(())
@@ -808,5 +881,33 @@ impl PlaybackBackend for MpvPlayer {
 
     fn set_speed(&self, speed: f64) -> Result<(), PlaybackError> {
         self.mpv.set_property("speed", speed).map_err(backend_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redacted_url;
+
+    #[test]
+    fn the_log_shows_a_stream_url_without_its_key_or_token() {
+        // An addon's link: the account key is a path segment.
+        assert_eq!(
+            redacted_url("https://addon.example.org/provider/abcdef0123456789/0/0/Show.S01E01.mkv"),
+            "https://addon.example.org/…4/Show.S01E01.mkv"
+        );
+        // A signed CDN link: the token is the query.
+        assert_eq!(
+            redacted_url("https://cdn.example.com/dl/file.mkv?token=secret&expires=1"),
+            "https://cdn.example.com/…1/file.mkv"
+        );
+        assert_eq!(
+            redacted_url("http://127.0.0.1:8771/remux-4k.mkv?tag=main"),
+            "http://127.0.0.1/remux-4k.mkv"
+        );
+        assert_eq!(
+            redacted_url("https://host.example/"),
+            "https://host.example/"
+        );
+        assert_eq!(redacted_url("not a url"), "<unparsable url>");
     }
 }
