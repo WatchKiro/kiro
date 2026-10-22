@@ -24,9 +24,9 @@ export interface StreamQuality {
   /** File size in bytes. */
   size?: number;
   /**
-   * Whether a debrid service has the file ready to play (`[TB+]`, ⚡, "cached",
-   * "instant"), or is still to download it (`[TB download]`, ⏳, "uncached").
-   * Unknown for streams that say neither.
+   * Whether the addon marks the file as cached, ready to start at once (`[XY+]`,
+   * ⚡, "cached", "instant"), or as still to be fetched (`[XY download]`, ⏳,
+   * "uncached"). Unknown for streams that say neither.
    */
   cached?: boolean;
   /** ISO 639-1 codes of the languages mentioned: flags first, then names. */
@@ -151,8 +151,9 @@ function parseSize(text: string): number | undefined {
   return unit && value > 0 ? Math.round(value * unit) : undefined;
 }
 
-// Debrid services: RealDebrid, TorBox, AllDebrid, Premiumize, Debrid-Link,
-// EasyDebrid, Offcloud, put.io… as Torrentio, Comet and MediaFusion tag them.
+// Cached and uncached markers as addons commonly write them: a short service tag
+// in brackets followed by + or ⚡ (cached) or "download", ⬇ or ⏳ (uncached),
+// or the words themselves.
 const UNCACHED = [
   /\[[a-z]{2,8}\s*(?:download|⬇️?|⏳)\s*\]/i,
   /⏳/u,

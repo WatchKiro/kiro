@@ -283,7 +283,7 @@ pub struct StreamSettings {
     pub max_resolution: u32,
     /// Pick HDR and Dolby Vision versions first (SDR first when off).
     pub prefer_hdr: bool,
-    /// Pick streams a debrid service already has ready first.
+    /// Pick streams their addon marks as cached (ready to start at once) first.
     pub prefer_cached: bool,
     /// Filter out cam, telesync and screener releases.
     pub exclude_cam: bool,
@@ -768,7 +768,7 @@ mod tests {
                 exclude_cam: true,
                 max_size_gb: Some(20),
                 avoid_codecs: vec![VideoCodec::Av1, VideoCodec::Hevc],
-                excluded_keywords: vec!["YIFY".into(), "3D".into()],
+                excluded_keywords: vec!["GROUP".into(), "3D".into()],
             },
             rows: RowSettings {
                 discover: Some(vec![CatalogRow {
@@ -1216,7 +1216,7 @@ mod tests {
                     "excludeCam": true,
                     "maxSizeGb": -3,
                     "avoidCodecs": ["av1", "av1", "mpeg2", "hevc"],
-                    "excludedKeywords": ["YIFY", " bad ", "yify", 4, "HC"],
+                    "excludedKeywords": ["GROUP", " bad ", "group", 4, "HC"],
                 },
             })
             .to_string(),
@@ -1250,7 +1250,7 @@ mod tests {
             StreamSettings {
                 exclude_cam: true,
                 avoid_codecs: vec![VideoCodec::Av1, VideoCodec::Hevc],
-                excluded_keywords: vec!["YIFY".into(), "HC".into()],
+                excluded_keywords: vec!["GROUP".into(), "HC".into()],
                 ..StreamSettings::default()
             }
         );

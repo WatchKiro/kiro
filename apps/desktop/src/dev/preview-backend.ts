@@ -17,7 +17,12 @@
  *   `localStorage['kiro.preview.profiles']` to `family` for three ("Me" with
  *   the seeded library, "Sam" with a little of their own, and "Kids", locked
  *   with the PIN 1234), so "Who’s watching?" shows at launch. Each profile
- *   has its own library and settings; new ones are kept until a reload;
+ *   has its own library and settings; new ones are kept until a reload. Set
+ *   it to `fresh` for a new install instead: one profile whose first-run
+ *   setup is pending, an empty library, and only the default addons
+ *   (Cinemeta and OpenSubtitles), so nothing provides streams and the setup
+ *   opens. Adding `https://streams.preview.kiro.invalid` there installs the
+ *   fake streams;
  * - the player is imitated by `preview-player.ts`: no video, but real
  *   controls, tracks and events over a still picture;
  * - settings are kept in `localStorage['kiro.preview.settings']` (the first
@@ -101,8 +106,8 @@ const SAMPLE_VIDEO =
   'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4';
 
 /**
- * Streams named the way Torrentio shows them through TorBox, in a scrambled
- * order so the ranking shows. Each has its own URL; the preview player fails
+ * Streams named the way stream addons often label them (resolution, release
+ * details, a "cached" tag), in a scrambled order so the ranking shows. Each has its own URL; the preview player fails
  * those with `dead` in them before they start, and those with `drops` after
  * a few seconds of playback (`preview-player.ts`). A 480p one is always dead.
  *
@@ -118,43 +123,43 @@ function previewStreams() {
   if (mode === 'none') return { streams: [] };
   const dead = [
     [
-      '[TB+] Preview\n4k HDR',
-      'Sample.2024.2160p.WEB-DL.DDP5.1.Atmos.HDR10.H.265-DEAD\n👤 311 💾 16.4 GB ⚙️ ThePirateBay',
+      '[XY+] Preview\n4k HDR',
+      'Sample.2024.2160p.WEB-DL.DDP5.1.Atmos.HDR10.H.265-DEAD\n👤 311 💾 16.4 GB ⚙️ Example',
     ],
     [
-      '[TB+] Preview\n4k HDR',
-      'Sample.2024.2160p.BluRay.DDP5.1.Atmos.HDR10.H.265-GONE\n👤 120 💾 17.0 GB ⚙️ 1337x',
+      '[XY+] Preview\n4k HDR',
+      'Sample.2024.2160p.BluRay.DDP5.1.Atmos.HDR10.H.265-GONE\n👤 120 💾 17.0 GB ⚙️ Example',
     ],
   ] as const;
   const playable = [
     [
-      '[TB download] Preview\n4k HDR',
-      'Sample.2024.UHD.BluRay.2160p.TrueHD.Atmos.7.1.HEVC.REMUX-FraMeSToR\n👤 51 💾 72.1 GB ⚙️ RARBG',
+      '[XY download] Preview\n4k HDR',
+      'Sample.2024.UHD.BluRay.2160p.TrueHD.Atmos.7.1.HEVC.REMUX-GROUP\n👤 51 💾 72.1 GB ⚙️ Example',
     ],
     [
-      '[TB+] Preview\n1080p',
-      'Sample.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX\n👤 402 💾 6.1 GB ⚙️ ThePirateBay',
+      '[XY+] Preview\n1080p',
+      'Sample.2024.1080p.WEB-DL.DDP5.1.H.264-GROUP\n👤 402 💾 6.1 GB ⚙️ Example',
     ],
     [
-      '[TB+] Preview\n4k DV | HDR',
-      'Sample.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX\n👤 214 💾 18.4 GB ⚙️ ThePirateBay',
+      '[XY+] Preview\n4k DV | HDR',
+      'Sample.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-GROUP\n👤 214 💾 18.4 GB ⚙️ Example',
     ],
-    ['[TB+] Preview\n720p', 'Sample.2024.720p.WEBRip.x264.AAC\n👤 90 💾 1.9 GB ⚙️ YTS'],
-    ['[TB+] Preview\n480p', 'Sample.2024.480p.WEBRip.x264-DEAD\n👤 4 💾 700 MB ⚙️ YTS'],
+    ['[XY+] Preview\n720p', 'Sample.2024.720p.WEBRip.x264.AAC\n👤 90 💾 1.9 GB ⚙️ Example'],
+    ['[XY+] Preview\n480p', 'Sample.2024.480p.WEBRip.x264-DEAD\n👤 4 💾 700 MB ⚙️ Example'],
     [
-      '[TB+] Preview\n1080p',
-      'Sample.2024.1080p.HDCAM.x264\n👤 12 💾 2.1 GB ⚙️ 1337x\nMulti Audio / 🇮🇹 / 🇪🇸',
+      '[XY+] Preview\n1080p',
+      'Sample.2024.1080p.HDCAM.x264\n👤 12 💾 2.1 GB ⚙️ Example\nMulti Audio / 🇮🇹 / 🇪🇸',
     ],
     [
-      '[TB download] Preview\n1080p',
-      'Sample.2024.1080p.BluRay.x265.10bit.DTS-HD.MA.5.1\n👤 77 💾 9.8 GB ⚙️ 1337x',
+      '[XY download] Preview\n1080p',
+      'Sample.2024.1080p.BluRay.x265.10bit.DTS-HD.MA.5.1\n👤 77 💾 9.8 GB ⚙️ Example',
     ],
   ] as const;
   const unplayable = [
     {
       infoHash: 'c9e15763f722f23e98a29decdfae341b98d53056',
       name: 'Preview\n4k',
-      title: 'Sample.2024.2160p.WEB-DL.DDP5.1.HDR.H.265\n👤 980 💾 16.2 GB ⚙️ ThePirateBay',
+      title: 'Sample.2024.2160p.WEB-DL.DDP5.1.HDR.H.265\n👤 980 💾 16.2 GB ⚙️ Example',
     },
     {
       url: 'http://insecure.preview.kiro.invalid/sample.mkv',
@@ -215,12 +220,12 @@ async function slowStreams() {
     streams: (
       [
         [
-          '[TB+] Slow\n1080p',
-          'Sample.2024.1080p.BluRay.DDP5.1.x265-SLOW\n👤 33 💾 7.4 GB ⚙️ 1337x',
+          '[XY+] Slow\n1080p',
+          'Sample.2024.1080p.BluRay.DDP5.1.x265-SLOW\n👤 33 💾 7.4 GB ⚙️ Example',
         ],
         [
-          '[TB download] Slow\n4k HDR',
-          'Sample.2024.2160p.WEB-DL.DDP5.1.HDR.H.265-SLOW\n👤 8 💾 15.2 GB ⚙️ 1337x',
+          '[XY download] Slow\n4k HDR',
+          'Sample.2024.2160p.WEB-DL.DDP5.1.HDR.H.265-SLOW\n👤 8 💾 15.2 GB ⚙️ Example',
         ],
       ] as const
     ).map(([name, title], index) => ({
@@ -347,6 +352,10 @@ const inflight = new Map<string, AbortController>();
 
 async function installedAddons(): Promise<InstalledAddonRecord[]> {
   if (addons) return addons;
+  if (FRESH_INSTALL) {
+    addons ??= await defaults();
+    return addons;
+  }
   // Kiro works without Kitsu, so the preview does too when it can't be reached.
   const kitsu = await fetchJson(KITSU).catch(() => undefined);
   addons ??= [
@@ -464,6 +473,8 @@ function episode(id: string, season: number, number: number, name: string): Libr
 }
 
 const started = Date.now();
+/** `kiro.preview.profiles` is `fresh`: a new install (see the top of this file). */
+const FRESH_INSTALL = readPreviewSetting('kiro.preview.profiles') === 'fresh';
 
 const SETTINGS_KEY = 'kiro.preview.settings';
 
@@ -841,9 +852,22 @@ interface PreviewProfile {
 const NAME_LIMIT = 20;
 const PROFILE_LIMIT = 8;
 
+if (FRESH_INSTALL) {
+  watchlist = [];
+  history = [];
+}
+
 const previewProfiles: PreviewProfile[] = [
   {
-    profile: { id: 1, name: 'Me', avatar: 'violet', hasPin: false, createdAt: started },
+    profile: {
+      id: 1,
+      name: 'Me',
+      avatar: 'violet',
+      hasPin: false,
+      createdAt: started,
+      // The seeded profile has been used before; a new install's hasn't.
+      firstRun: FRESH_INSTALL ? 'pending' : 'completed',
+    },
     pin: null,
     lastUsed: 0,
     watchlist,
@@ -863,7 +887,14 @@ function addPreviewProfile(
 ) {
   const id = nextProfileId++;
   previewProfiles.push({
-    profile: { id, name, avatar, hasPin: pin !== null, createdAt: Date.now() },
+    profile: {
+      id,
+      name,
+      avatar,
+      hasPin: pin !== null,
+      createdAt: Date.now(),
+      firstRun: 'pending',
+    },
     pin,
     lastUsed: 0,
     ...seed,
@@ -1000,6 +1031,14 @@ const profileHandlers: Record<string, (args: Args) => unknown> = {
     entry.lastUsed = Date.now();
     activate(entry);
     stremioAccountRead = false;
+    return overviewOfProfiles();
+  },
+  profile_finish_first_run: ({ outcome }) => {
+    if (outcome !== 'completed' && outcome !== 'skipped') {
+      throw commandError('INVALID_ARGUMENT', 'Expected completed or skipped');
+    }
+    const entry = findProfile(activeProfile);
+    entry.profile = { ...entry.profile, firstRun: outcome };
     return overviewOfProfiles();
   },
   profile_set_show_picker: ({ show }) => {

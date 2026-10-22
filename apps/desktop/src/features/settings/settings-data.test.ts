@@ -64,7 +64,7 @@ describe('parseSettings', () => {
       excludeCam: true,
       maxSizeGb: 20,
       avoidCodecs: ['av1'],
-      excludedKeywords: ['YIFY', '3D'],
+      excludedKeywords: ['GROUP', '3D'],
     },
     rows: {
       discover: [{ addon: 'com.linvo.cinemeta', type: 'movie', catalog: 'top', hidden: true }],
@@ -131,13 +131,13 @@ describe('parseSettings', () => {
         streams: {
           maxSizeGb: 0,
           avoidCodecs: ['hevc', 'mpeg2', 'hevc', 'av1'],
-          excludedKeywords: ['YIFY', ' yify ', '', 4, 'x'.repeat(41), 'HC'],
+          excludedKeywords: ['GROUP', ' group ', '', 4, 'x'.repeat(41), 'HC'],
         },
       }).streams,
       {
         ...DEFAULT_SETTINGS.streams,
         avoidCodecs: ['av1', 'hevc'],
-        excludedKeywords: ['YIFY', 'HC'],
+        excludedKeywords: ['GROUP', 'HC'],
       },
     );
   });
@@ -211,7 +211,7 @@ describe('parseSettings', () => {
 
 describe('keywords', () => {
   it('stores trimmed keywords of 1 to 40 characters without control characters', () => {
-    assert.equal(normalizeKeyword('  YIFY '), 'YIFY');
+    assert.equal(normalizeKeyword('  GROUP '), 'GROUP');
     assert.equal(normalizeKeyword('Dual Audio'), 'Dual Audio');
     assert.equal(normalizeKeyword('x'.repeat(MAX_KEYWORD_CHARS)), 'x'.repeat(MAX_KEYWORD_CHARS));
     for (const input of ['', '   ', 'x'.repeat(MAX_KEYWORD_CHARS + 1), 'a\nb', 'tab\there']) {
@@ -224,9 +224,9 @@ describe('keywords', () => {
     const many = Array.from({ length: MAX_KEYWORDS + 5 }, (_, index) => `word${index}`);
     assert.equal(normalizeKeywords(many).length, MAX_KEYWORDS);
     assert.deepEqual(
-      withStreams(DEFAULT_SETTINGS, { excludedKeywords: [' 3D', '3d', 'YIFY'] }).streams
+      withStreams(DEFAULT_SETTINGS, { excludedKeywords: [' 3D', '3d', 'GROUP'] }).streams
         .excludedKeywords,
-      ['3D', 'YIFY'],
+      ['3D', 'GROUP'],
     );
   });
 });

@@ -14,6 +14,7 @@ import {
   type RankedStream,
   type UnplayableStream,
 } from '@/features/title/stream-ranking';
+import { streamAvailability } from '@/features/title/title-data';
 import { useTitleStore } from '@/features/title/title-store';
 import { useRankedStreams, type AddonStreamsStatus } from '@/features/title/use-ranked-streams';
 
@@ -62,6 +63,8 @@ export function StreamList({
   };
 
   if (sources.length === 0) {
+    // No addon to ask: none provides streams at all, or none for this title.
+    const none = streamAvailability(addons, type, id) === 'none';
     return (
       <section
         id="streams"
@@ -70,13 +73,20 @@ export function StreamList({
       >
         <Puzzle aria-hidden className="size-6 text-ink-500" />
         <p className="mt-3 text-sm text-ink-300">
-          None of your installed addons provide streams for this title.
+          {none
+            ? 'None of your addons provide streams.'
+            : 'None of your addons provide streams for this title.'}
         </p>
+        {none && (
+          <p className="mt-1 text-[13px] text-ink-500">
+            Kiro plays what your addons provide. Add one that provides streams to watch here.
+          </p>
+        )}
         <Link
           to="/addons"
-          className="mt-1 rounded text-[13px] text-accent-strong hover:underline focus-visible:focus-ring"
+          className="mt-2 rounded text-[13px] text-accent-strong hover:underline focus-visible:focus-ring"
         >
-          Install a stream addon
+          Go to Addons
         </Link>
       </section>
     );

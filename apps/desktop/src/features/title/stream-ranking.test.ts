@@ -33,8 +33,8 @@ function addon(name: string): InstalledAddon {
   };
 }
 
-const TORRENTIO = addon('Torrentio');
-const TORBOX = addon('TorBox');
+const ALPHA = addon('Alpha');
+const BETA = addon('Beta');
 const DIRECT = addon('Direct');
 
 const OPTIONS: RankingOptions = { ...DEFAULT_STREAM_SETTINGS };
@@ -51,37 +51,37 @@ function order(groups: AddonStreams[], options: Partial<RankingOptions> = {}) {
   );
 }
 
-// A TorBox user's Torrentio results for one film, in the addon's own order.
+// One addon's results for one film, in the addon's own order.
 const CACHED_4K_DV = stream(
-  '[TB+] Torrentio\n4k DV | HDR',
-  '4K DV · Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX\n👤 214 💾 18.4 GB',
-  { behaviorHints: { bingeGroup: 'torrentio|4k|DV|HDR' } },
+  '[XY+] Alpha\n4k DV | HDR',
+  '4K DV · Sample.Film.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-GROUP\n👤 214 💾 18.4 GB',
+  { behaviorHints: { bingeGroup: 'alpha|4k|DV|HDR' } },
 );
 const UNCACHED_4K_REMUX = stream(
-  '[TB download] Torrentio\n4k HDR',
-  '4K remux · Dune.Part.Two.2024.UHD.BluRay.2160p.TrueHD.Atmos.7.1.HEVC.REMUX\n👤 51 💾 72.1 GB',
+  '[XY download] Alpha\n4k HDR',
+  '4K remux · Sample.Film.2024.UHD.BluRay.2160p.TrueHD.Atmos.7.1.HEVC.REMUX\n👤 51 💾 72.1 GB',
 );
 const CACHED_1080 = stream(
-  '[TB+] Torrentio\n1080p',
-  '1080p · Dune.Part.Two.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX\n👤 402 💾 6.1 GB',
+  '[XY+] Alpha\n1080p',
+  '1080p · Sample.Film.2024.1080p.WEB-DL.DDP5.1.H.264-GROUP\n👤 402 💾 6.1 GB',
 );
 const CACHED_720 = stream(
-  '[TB+] Torrentio\n720p',
-  '720p · Dune.Part.Two.2024.720p.WEBRip.x264.AAC\n👤 90 💾 1.9 GB',
+  '[XY+] Alpha\n720p',
+  '720p · Sample.Film.2024.720p.WEBRip.x264.AAC\n👤 90 💾 1.9 GB',
 );
 const CACHED_CAM = stream(
-  '[TB+] Torrentio\n1080p',
-  'cam · Dune.Part.Two.2024.1080p.HDCAM.x264\n💾 2.1 GB',
+  '[XY+] Alpha\n1080p',
+  'cam · Sample.Film.2024.1080p.HDCAM.x264\n💾 2.1 GB',
 );
 const TORRENT: Stream = {
   infoHash: 'a'.repeat(40),
-  name: 'Torrentio\n4k',
-  title: 'torrent · Dune.Part.Two.2160p',
+  name: 'Alpha\n4k',
+  title: 'torrent · Sample.Film.2160p',
 };
 const HTTP: Stream = { url: 'http://cdn.example/x.mkv', name: 'Plain', title: 'http · 1080p' };
 
-const TORRENTIO_RESULTS: AddonStreams = {
-  addon: TORRENTIO,
+const ALPHA_RESULTS: AddonStreams = {
+  addon: ALPHA,
   streams: [TORRENT, CACHED_720, UNCACHED_4K_REMUX, CACHED_CAM, CACHED_1080, HTTP, CACHED_4K_DV],
 };
 
@@ -89,7 +89,7 @@ const label = (text: string | undefined) => text?.split(' · ')[0];
 
 describe('rankStreams', () => {
   it('puts cached streams first, then the best resolution', () => {
-    assert.deepEqual(order([TORRENTIO_RESULTS]).map(label), [
+    assert.deepEqual(order([ALPHA_RESULTS]).map(label), [
       '4K DV',
       '1080p',
       '720p',
@@ -99,25 +99,25 @@ describe('rankStreams', () => {
   });
 
   it('keeps unplayable streams apart, with the reason, in addon order', () => {
-    const { unplayable } = rankStreams([TORRENTIO_RESULTS], OPTIONS);
+    const { unplayable } = rankStreams([ALPHA_RESULTS], OPTIONS);
     assert.deepEqual(
       unplayable.map(({ stream: unplayed, reason }) => [label(unplayed.title), reason]),
       [
-        ['torrent', 'Torrents aren’t supported yet'],
+        ['torrent', 'Torrents aren’t supported'],
         ['http', 'Insecure (http) streams aren’t supported'],
       ],
     );
   });
 
   it('respects the maximum resolution', () => {
-    assert.deepEqual(order([TORRENTIO_RESULTS], { maxResolution: 1080 }).map(label), [
+    assert.deepEqual(order([ALPHA_RESULTS], { maxResolution: 1080 }).map(label), [
       '1080p',
       '720p',
       '4K DV',
       'cam',
       '4K remux',
     ]);
-    assert.deepEqual(order([TORRENTIO_RESULTS], { maxResolution: 720 }).map(label).slice(0, 3), [
+    assert.deepEqual(order([ALPHA_RESULTS], { maxResolution: 720 }).map(label).slice(0, 3), [
       '720p',
       '1080p',
       '4K DV',
@@ -125,7 +125,7 @@ describe('rankStreams', () => {
   });
 
   it('ignores the cached marker when cached streams aren’t preferred', () => {
-    assert.deepEqual(order([TORRENTIO_RESULTS], { preferCached: false }).map(label), [
+    assert.deepEqual(order([ALPHA_RESULTS], { preferCached: false }).map(label), [
       '4K DV',
       '4K remux',
       '1080p',
@@ -136,11 +136,11 @@ describe('rankStreams', () => {
 
   it('treats streams that say nothing about caching as ready, after cached ones', () => {
     const direct = stream('Direct\n4K', 'direct · 2160p WEB-DL HDR 15 GB');
-    const uncached = stream('[TB download] Torrentio\n4K', 'uncached · 2160p WEB-DL HDR 15 GB');
-    const cached = stream('[TB+] Torrentio\n1080p', 'cached · 1080p WEB-DL 5 GB');
+    const uncached = stream('[XY download] Alpha\n4K', 'uncached · 2160p WEB-DL HDR 15 GB');
+    const cached = stream('[XY+] Alpha\n1080p', 'cached · 1080p WEB-DL 5 GB');
     assert.deepEqual(
       order([
-        { addon: TORRENTIO, streams: [uncached, cached] },
+        { addon: ALPHA, streams: [uncached, cached] },
         { addon: DIRECT, streams: [direct] },
       ]).map(label),
       ['cached', 'direct', 'uncached'],
@@ -151,7 +151,7 @@ describe('rankStreams', () => {
     const sdr = stream('A\n4K', 'sdr · 2160p WEB-DL 15 GB');
     const dvOnly = stream('A\n4K', 'dv · 2160p WEB-DL DV 15 GB');
     const hdr = stream('A\n4K', 'hdr · 2160p WEB-DL HDR10 15 GB');
-    const groups = [{ addon: TORBOX, streams: [sdr, dvOnly, hdr] }];
+    const groups = [{ addon: BETA, streams: [sdr, dvOnly, hdr] }];
     assert.deepEqual(order(groups).map(label), ['hdr', 'dv', 'sdr']);
     assert.deepEqual(order(groups, { preferHdr: false }).map(label), ['sdr', 'dv', 'hdr']);
   });
@@ -161,7 +161,7 @@ describe('rankStreams', () => {
     const fake = stream('A\n1080p', 'fake · 1080p WEB-DL 120 MB');
     const good = stream('A\n1080p', 'good · 1080p WEB-DL 4.2 GB');
     const huge = stream('A\n1080p', 'huge · 1080p BluRay REMUX 31 GB');
-    assert.deepEqual(order([{ addon: TORBOX, streams: [fake, huge, good] }]).map(label), [
+    assert.deepEqual(order([{ addon: BETA, streams: [fake, huge, good] }]).map(label), [
       'good',
       'huge',
       'fake',
@@ -176,7 +176,7 @@ describe('rankStreams', () => {
     const hevc = stream('A\n1080p', 'hevc · 1080p WEB-DL x265 AAC 2.0 4 GB');
     const bigger = stream('A\n1080p', 'bigger · 1080p WEB-DL x264 AAC 2.0 5 GB');
     assert.deepEqual(
-      order([{ addon: TORBOX, streams: [web, bigger, hevc, surround, atmos, bluray] }]).map(label),
+      order([{ addon: BETA, streams: [web, bigger, hevc, surround, atmos, bluray] }]).map(label),
       ['bluray', 'atmos', 'surround', 'hevc', 'bigger', 'web'],
     );
   });
@@ -185,7 +185,7 @@ describe('rankStreams', () => {
     const italian = stream('A\n4K', 'italian · 2160p 🇮🇹 HDR 15 GB');
     const multi = stream('A\n1080p', 'multi · 1080p MULTi 🇮🇹 🇬🇧 5 GB');
     const unlabelled = stream('A\n720p', 'unlabelled · 720p 2 GB');
-    const groups = [{ addon: TORBOX, streams: [italian, multi, unlabelled] }];
+    const groups = [{ addon: BETA, streams: [italian, multi, unlabelled] }];
     assert.deepEqual(order(groups, { languages: ['en'] }).map(label), [
       'multi',
       'unlabelled',
@@ -205,22 +205,22 @@ describe('rankStreams', () => {
     const b1 = stream('X', 'b1 · 1080p');
     assert.deepEqual(
       order([
-        { addon: TORRENTIO, streams: [a1, a2] },
-        { addon: TORBOX, streams: [b1] },
+        { addon: ALPHA, streams: [a1, a2] },
+        { addon: BETA, streams: [b1] },
       ]).map(label),
       ['a1', 'a2', 'b1'],
     );
     assert.deepEqual(
       order([
-        { addon: TORBOX, streams: [b1] },
-        { addon: TORRENTIO, streams: [a1, a2] },
+        { addon: BETA, streams: [b1] },
+        { addon: ALPHA, streams: [a1, a2] },
       ]).map(label),
       ['b1', 'a1', 'a2'],
     );
   });
 
   it('gives the same order every time, whatever the input order of equal streams', () => {
-    const groups = [TORRENTIO_RESULTS, { addon: TORBOX, streams: [CACHED_1080, CACHED_4K_DV] }];
+    const groups = [ALPHA_RESULTS, { addon: BETA, streams: [CACHED_1080, CACHED_4K_DV] }];
     const first = rankStreams(groups, OPTIONS).playable.map((ranked) => ranked.url);
     for (let run = 0; run < 5; run++) {
       assert.deepEqual(
@@ -231,7 +231,7 @@ describe('rankStreams', () => {
   });
 
   it('returns nothing playable when there is nothing to play', () => {
-    const ranking = rankStreams([{ addon: TORRENTIO, streams: [TORRENT, HTTP] }], OPTIONS);
+    const ranking = rankStreams([{ addon: ALPHA, streams: [TORRENT, HTTP] }], OPTIONS);
     assert.deepEqual(ranking.playable, []);
     assert.equal(ranking.unplayable.length, 2);
     assert.deepEqual(rankStreams([], OPTIONS), { playable: [], filtered: [], unplayable: [] });
@@ -240,7 +240,7 @@ describe('rankStreams', () => {
 
 describe('stream filters', () => {
   /** Labels of the filtered streams, best first, with why. */
-  const filtered = (options: Partial<RankingOptions>, groups = [TORRENTIO_RESULTS]) =>
+  const filtered = (options: Partial<RankingOptions>, groups = [ALPHA_RESULTS]) =>
     rankStreams(groups, { ...OPTIONS, ...options }).filtered.map(({ stream: ranked, reasons }) => [
       label(ranked.title),
       reasons.join(', '),
@@ -251,7 +251,7 @@ describe('stream filters', () => {
   });
 
   it('moves cam releases out of the playable streams, keeping them listed', () => {
-    const ranking = rankStreams([TORRENTIO_RESULTS], { ...OPTIONS, excludeCam: true });
+    const ranking = rankStreams([ALPHA_RESULTS], { ...OPTIONS, excludeCam: true });
     assert.deepEqual(
       ranking.playable.map((ranked) => label(ranked.stream.title)),
       ['4K DV', '1080p', '720p', '4K remux'],
@@ -262,11 +262,9 @@ describe('stream filters', () => {
   });
 
   it('filters files over the maximum size, keeping streams of unknown size', () => {
-    const unknown = stream('[TB+] Torrentio\n4k', 'unknown · 2160p WEB-DL HDR');
+    const unknown = stream('[XY+] Alpha\n4k', 'unknown · 2160p WEB-DL HDR');
     assert.deepEqual(
-      filtered({ maxSizeGb: 10 }, [
-        { addon: TORRENTIO, streams: [...TORRENTIO_RESULTS.streams, unknown] },
-      ]),
+      filtered({ maxSizeGb: 10 }, [{ addon: ALPHA, streams: [...ALPHA_RESULTS.streams, unknown] }]),
       [
         ['4K DV', 'Over 10 GB'],
         ['4K remux', 'Over 10 GB'],
@@ -281,7 +279,7 @@ describe('stream filters', () => {
       ['4K remux', 'HEVC'],
     ]);
     const av1 = stream('A\n1080p', 'av1 · 1080p WEB-DL AV1 3 GB');
-    assert.deepEqual(filtered({ avoidCodecs: ['av1'] }, [{ addon: TORBOX, streams: [av1] }]), [
+    assert.deepEqual(filtered({ avoidCodecs: ['av1'] }, [{ addon: BETA, streams: [av1] }]), [
       ['av1', 'AV1'],
     ]);
   });
@@ -291,17 +289,17 @@ describe('stream filters', () => {
       stream('A\n1080p', `${title} · 1080p WEB 4 GB`, { behaviorHints: hints });
     const groups = [
       {
-        addon: TORBOX,
+        addon: BETA,
         streams: [
-          group('yts', { filename: 'Film.2024.1080p.WEBRip.x264-YIFY.mp4' }),
+          group('tagged', { filename: 'Film.2024.1080p.WEBRip.x264-GROUP.mp4' }),
           group('hardcoded Film.2024.HC.1080p'),
           group('hcam Film.2024.HCAM'),
           group('dual Film.2024.Dual.Audio'),
         ],
       },
     ];
-    assert.deepEqual(filtered({ excludedKeywords: ['yify', 'HC', 'dual audio'] }, groups), [
-      ['yts', '“yify”'],
+    assert.deepEqual(filtered({ excludedKeywords: ['group', 'HC', 'dual audio'] }, groups), [
+      ['tagged', '“group”'],
       ['hardcoded Film.2024.HC.1080p', '“HC”'],
       ['dual Film.2024.Dual.Audio', '“dual audio”'],
     ]);
@@ -310,22 +308,22 @@ describe('stream filters', () => {
   });
 
   it('lists every reason, and never picks a filtered stream', () => {
-    const ranking = rankStreams([TORRENTIO_RESULTS], {
+    const ranking = rankStreams([ALPHA_RESULTS], {
       ...OPTIONS,
       excludeCam: true,
       maxSizeGb: 1,
       avoidCodecs: ['hevc'],
-      excludedKeywords: ['torrentio'],
+      excludedKeywords: ['alpha'],
     });
     assert.deepEqual(ranking.playable, []);
     assert.deepEqual(
       ranking.filtered.map(({ stream: ranked, reasons }) => [label(ranked.title), reasons]),
       [
-        ['4K DV', ['Over 1 GB', 'HEVC', '“torrentio”']],
-        ['1080p', ['Over 1 GB', '“torrentio”']],
-        ['720p', ['Over 1 GB', '“torrentio”']],
-        ['cam', ['CAM', 'Over 1 GB', '“torrentio”']],
-        ['4K remux', ['Over 1 GB', 'HEVC', '“torrentio”']],
+        ['4K DV', ['Over 1 GB', 'HEVC', '“alpha”']],
+        ['1080p', ['Over 1 GB', '“alpha”']],
+        ['720p', ['Over 1 GB', '“alpha”']],
+        ['cam', ['CAM', 'Over 1 GB', '“alpha”']],
+        ['4K remux', ['Over 1 GB', 'HEVC', '“alpha”']],
       ],
     );
     assert.equal(readyToStart(ranking, true, false, OPTIONS), true, 'settled: show the list');
@@ -334,7 +332,7 @@ describe('stream filters', () => {
 
 describe('the stream time budget', () => {
   const quality = (target: Stream) => ({ quality: parseStreamQuality(target) });
-  const ranking = (...streams: Stream[]) => rankStreams([{ addon: TORBOX, streams }], OPTIONS);
+  const ranking = (...streams: Stream[]) => rankStreams([{ addon: BETA, streams }], OPTIONS);
 
   it('starts only cached streams within the maximum resolution', () => {
     assert.equal(goodEnoughToStart(quality(CACHED_4K_DV), OPTIONS), true);
@@ -348,9 +346,9 @@ describe('the stream time budget', () => {
 
   it('never settles early for a cam, an unknown resolution or another language', () => {
     assert.equal(goodEnoughToStart(quality(CACHED_CAM), OPTIONS), false);
-    const unknown = stream('[TB+] Torrentio', 'unknown · Dune.Part.Two.2024.WEB-DL 6 GB');
+    const unknown = stream('[XY+] Alpha', 'unknown · Sample.Film.2024.WEB-DL 6 GB');
     assert.equal(goodEnoughToStart(quality(unknown), OPTIONS), false);
-    const italian = stream('[TB+] Torrentio\n1080p', 'italian · 1080p 🇮🇹 5 GB');
+    const italian = stream('[XY+] Alpha\n1080p', 'italian · 1080p 🇮🇹 5 GB');
     assert.equal(goodEnoughToStart(quality(italian), { ...OPTIONS, languages: ['en'] }), false);
     assert.equal(goodEnoughToStart(quality(italian), { ...OPTIONS, languages: ['it'] }), true);
   });
@@ -368,12 +366,12 @@ describe('the stream time budget', () => {
   it('judges the best stream so far, as Play would start it', () => {
     // The cached 1080p ranks first when 4K is over the maximum.
     const options: RankingOptions = { ...OPTIONS, maxResolution: 1080 };
-    const groups = [{ addon: TORBOX, streams: [CACHED_4K_DV, CACHED_1080] }];
+    const groups = [{ addon: BETA, streams: [CACHED_4K_DV, CACHED_1080] }];
     assert.equal(readyToStart(rankStreams(groups, options), false, true, options), true);
     // Without caching preferred, the uncached remux ranks first and isn't good enough.
     const uncachedFirst = { ...OPTIONS, preferCached: false };
     const remux = rankStreams(
-      [{ addon: TORBOX, streams: [CACHED_1080, UNCACHED_4K_REMUX] }],
+      [{ addon: BETA, streams: [CACHED_1080, UNCACHED_4K_REMUX] }],
       uncachedFirst,
     );
     assert.equal(readyToStart(remux, false, true, uncachedFirst), false);
@@ -417,20 +415,20 @@ describe('stream labels', () => {
   });
 
   it('describes the chosen stream and builds the player request', () => {
-    const [best] = rankStreams([TORRENTIO_RESULTS], OPTIONS).playable;
+    const [best] = rankStreams([ALPHA_RESULTS], OPTIONS).playable;
     assert.ok(best);
-    assert.equal(describeStream(best), 'Torrentio · 4K · DV · HDR · Atmos · 18.4 GB · Cached');
+    assert.equal(describeStream(best), 'Alpha · 4K · DV · HDR · Atmos · 18.4 GB · Cached');
     const artwork = { background: 'https://img.example/bg.jpg' };
     assert.deepEqual(
-      rankedPlaybackRequest(best, { title: 'Dune: Part Two', subtitle: 'S1 E2', artwork }),
+      rankedPlaybackRequest(best, { title: 'Sample Film', subtitle: 'S1 E2', artwork }),
       {
         url: best.url,
-        title: 'Dune: Part Two',
-        subtitle: 'S1 E2 — Torrentio · [TB+] Torrentio',
-        streamLabel: 'Torrentio · 4K · DV · HDR · Atmos · 18.4 GB · Cached',
+        title: 'Sample Film',
+        subtitle: 'S1 E2 — Alpha · [XY+] Alpha',
+        streamLabel: 'Alpha · 4K · DV · HDR · Atmos · 18.4 GB · Cached',
         artwork,
         // Up next plays the next episode from the same addon and release.
-        source: { addon: TORRENTIO.transportUrl, bingeGroup: 'torrentio|4k|DV|HDR' },
+        source: { addon: ALPHA.transportUrl, bingeGroup: 'alpha|4k|DV|HDR' },
       },
     );
   });

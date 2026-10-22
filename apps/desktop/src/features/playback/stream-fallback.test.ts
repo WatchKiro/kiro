@@ -31,7 +31,7 @@ function addon(name: string): InstalledAddon {
   };
 }
 
-const TORRENTIO = addon('Torrentio');
+const ALPHA = addon('Alpha');
 const OTHER = addon('Other');
 
 const stream = (id: string, title: string, bingeGroup?: string): Stream => ({
@@ -56,35 +56,35 @@ const ids = (choices: readonly RankedStream[]) => choices.map(({ stream: { name 
 // from others, and a cam the settings filter out.
 const { playable, filtered } = rank(
   [
-    TORRENTIO,
+    ALPHA,
     [
-      stream('720p', 'Film.2024.720p.WEB-DL.x264 💾 1.5 GB', 'torrentio|720p'),
-      stream('4k', 'Film.2024.2160p.WEB-DL.HDR.x265 💾 15 GB', 'torrentio|flux'),
-      stream('cam', 'Film.2024.1080p.HDCAM.x264 💾 2 GB', 'torrentio|cam'),
+      stream('720p', 'Film.2024.720p.WEB-DL.x264 💾 1.5 GB', 'alpha|720p'),
+      stream('4k', 'Film.2024.2160p.WEB-DL.HDR.x265 💾 15 GB', 'alpha|group'),
+      stream('cam', 'Film.2024.1080p.HDCAM.x264 💾 2 GB', 'alpha|cam'),
     ],
   ],
   [
     OTHER,
     [
       stream('1080p', 'Film.2024.1080p.BluRay.x264 💾 9 GB', 'other|bluray'),
-      stream('1080p-flux', 'Film.2024.1080p.WEB-DL.x264 💾 5 GB', 'torrentio|flux'),
+      stream('1080p-group', 'Film.2024.1080p.WEB-DL.x264 💾 5 GB', 'alpha|group'),
     ],
   ],
 );
 
 describe('fallbackCandidates', () => {
   it('keeps the ranked order, without the streams that failed', () => {
-    assert.deepEqual(ids(playable), ['4k', '1080p', '1080p-flux', '720p']);
+    assert.deepEqual(ids(playable), ['4k', '1080p', '1080p-group', '720p']);
     assert.deepEqual(ids(fallbackCandidates(playable, [urlOf('4k')], undefined)), [
       '1080p',
-      '1080p-flux',
+      '1080p-group',
       '720p',
     ]);
   });
 
   it('tries the same release (binge group) first', () => {
-    assert.deepEqual(ids(fallbackCandidates(playable, [urlOf('4k')], 'torrentio|flux')), [
-      '1080p-flux',
+    assert.deepEqual(ids(fallbackCandidates(playable, [urlOf('4k')], 'alpha|group')), [
+      '1080p-group',
       '1080p',
       '720p',
     ]);
@@ -92,12 +92,12 @@ describe('fallbackCandidates', () => {
 
   it('respects the stream filters: a filtered stream is never fallen back to', () => {
     assert.deepEqual(ids(filtered), ['cam']);
-    const all = fallbackCandidates(playable, [urlOf('4k'), urlOf('1080p')], 'torrentio|cam');
+    const all = fallbackCandidates(playable, [urlOf('4k'), urlOf('1080p')], 'alpha|cam');
     assert.ok(!ids(all).includes('cam'));
   });
 
   it('lists a URL once, as the same stream', () => {
-    const twice = rank([TORRENTIO, [stream('a', 'A 1080p'), stream('a', 'A 1080p again')]]);
+    const twice = rank([ALPHA, [stream('a', 'A 1080p'), stream('a', 'A 1080p again')]]);
     assert.equal(fallbackCandidates(twice.playable, [], undefined).length, 1);
     assert.equal(fallbackCandidates(twice.playable, [urlOf('a')], undefined).length, 0);
   });
@@ -105,8 +105,8 @@ describe('fallbackCandidates', () => {
 
 describe('nextFallback', () => {
   it('moves on to the next stream and says which attempt it is', () => {
-    const next = nextFallback(playable, [urlOf('4k')], 'torrentio|flux');
-    assert.equal(next?.choice.stream.name, '1080p-flux');
+    const next = nextFallback(playable, [urlOf('4k')], 'alpha|group');
+    assert.equal(next?.choice.stream.name, '1080p-group');
     assert.equal(next?.attempt, 2);
     // Four streams in all: the one that failed and three more.
     assert.equal(next?.total, 4);
@@ -124,12 +124,12 @@ describe('nextFallback', () => {
       failed.push(next.choice.url);
       next = nextFallback(playable, failed, undefined);
     }
-    assert.deepEqual(order, ['1080p 2/4', '1080p-flux 3/4', '720p 4/4']);
+    assert.deepEqual(order, ['1080p 2/4', '1080p-group 3/4', '720p 4/4']);
   });
 
   it(`stops after ${MAX_STREAM_ATTEMPTS} streams`, () => {
     const many = rank([
-      TORRENTIO,
+      ALPHA,
       Array.from({ length: 8 }, (_, index) => stream(`s${index}`, `S${index} 1080p`)),
     ]).playable;
     const failed = [many[0]!.url];
@@ -160,14 +160,14 @@ describe('switchRequest', () => {
   const episode: PlaybackRequest = {
     url: urlOf('4k'),
     title: 'Show',
-    subtitle: 'S1 E2 · Pilot — Torrentio · 4k',
-    streamLabel: 'Torrentio · 4K',
+    subtitle: 'S1 E2 · Pilot — Alpha · 4k',
+    streamLabel: 'Alpha · 4K',
     media: {
       title: { type: 'series', id: 'tt1', name: 'Show', poster: null },
       video: { id: 'tt1:1:2', season: 1, episode: 2, name: 'Pilot' },
     },
     artwork: { background: 'https://img.example/bg.jpg' },
-    source: { addon: TORRENTIO.transportUrl, bingeGroup: 'torrentio|flux' },
+    source: { addon: ALPHA.transportUrl, bingeGroup: 'alpha|group' },
   };
 
   it('plays the chosen stream from the given position, for the same episode', () => {

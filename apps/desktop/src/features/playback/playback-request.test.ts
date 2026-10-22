@@ -30,7 +30,7 @@ describe('parsePlaybackRequest', () => {
 
   it('keeps the chosen stream’s label and drops a malformed one', () => {
     const base = { url: 'https://cdn.example/a.mp4', title: 'Movie' };
-    const streamLabel = 'Torrentio · 4K · HDR · 18.4 GB · Cached';
+    const streamLabel = 'Alpha · 4K · HDR · 18.4 GB · Cached';
     assert.deepEqual(parsePlaybackRequest({ ...base, streamLabel }), { ...base, streamLabel });
     assert.deepEqual(parsePlaybackRequest({ ...base, streamLabel: 4 }), base);
     assert.deepEqual(parsePlaybackRequest({ ...base, streamLabel: 'x'.repeat(301) }), base);
@@ -73,7 +73,7 @@ describe('parsePlaybackRequest', () => {
 
   it('keeps the stream source for Up next', () => {
     const base = { url: 'https://cdn.example/a.mp4', title: 'Show' };
-    const source = { addon: 'https://addon.example/manifest.json', bingeGroup: 'torbox|1080p' };
+    const source = { addon: 'https://addon.example/manifest.json', bingeGroup: 'beta|1080p' };
     assert.deepEqual(parsePlaybackRequest({ ...base, source }), { ...base, source });
     assert.deepEqual(
       parsePlaybackRequest({ ...base, source: { addon: source.addon, bingeGroup: 7 } }),
@@ -86,13 +86,13 @@ describe('parsePlaybackRequest', () => {
 describe('streamPlaybackRequest', () => {
   const addon = {
     transportUrl: 'https://addon.example/manifest.json',
-    manifest: { name: 'TorBox' },
+    manifest: { name: 'Beta' },
   };
 
   it('names the episode, the addon and the stream, and records the binge group', () => {
     const request = streamPlaybackRequest({
       url: 'https://cdn.example/e4.mkv',
-      stream: { name: 'TorBox\n1080p', behaviorHints: { bingeGroup: 'torbox|1080p' } },
+      stream: { name: 'Beta\n1080p', behaviorHints: { bingeGroup: 'beta|1080p' } },
       addon,
       title: 'Show',
       subtitle: 'S1 E4 · Title',
@@ -100,8 +100,8 @@ describe('streamPlaybackRequest', () => {
     assert.deepEqual(request, {
       url: 'https://cdn.example/e4.mkv',
       title: 'Show',
-      subtitle: 'S1 E4 · Title — TorBox · TorBox',
-      source: { addon: addon.transportUrl, bingeGroup: 'torbox|1080p' },
+      subtitle: 'S1 E4 · Title — Beta · Beta',
+      source: { addon: addon.transportUrl, bingeGroup: 'beta|1080p' },
     });
     assert.deepEqual(parsePlaybackRequest(request), request, 'survives router state');
   });
@@ -120,8 +120,8 @@ describe('streamPlaybackRequest', () => {
       title: 'Movie',
     });
     assert.deepEqual(request.subtitles, [
-      { url: 'https://subs.example/en.srt', language: 'eng', origin: 'TorBox' },
-      { url: 'https://subs.example/x.srt', label: 'Commentary', origin: 'TorBox' },
+      { url: 'https://subs.example/en.srt', language: 'eng', origin: 'Beta' },
+      { url: 'https://subs.example/x.srt', label: 'Commentary', origin: 'Beta' },
     ]);
     assert.deepEqual(request.file, { filename: 'Movie.2024.1080p.mkv', videoSize: 1_234_567 });
     assert.deepEqual(parsePlaybackRequest(request), request, 'survives router state');
@@ -151,19 +151,19 @@ describe('streamPlaybackRequest', () => {
       addon,
       title: 'Movie',
     });
-    assert.equal(request.subtitle, 'TorBox');
+    assert.equal(request.subtitle, 'Beta');
     assert.deepEqual(request.source, { addon: addon.transportUrl });
   });
 });
 
 describe('nowPlayingFor', () => {
   const addon = {
-    transportUrl: 'https://torrentio.example/manifest.json',
-    manifest: { name: 'Torrentio' },
+    transportUrl: 'https://alpha.example/manifest.json',
+    manifest: { name: 'Alpha' },
   };
   const episode = streamPlaybackRequest({
-    url: 'https://debrid.example/dl/abc123/Breaking.Bad.S02E04.mkv',
-    stream: { name: 'Torrentio\n4K', behaviorHints: { filename: 'Breaking.Bad.S02E04.mkv' } },
+    url: 'https://files.example/dl/abc123/Example.Show.S02E04.mkv',
+    stream: { name: 'Alpha\n4K', behaviorHints: { filename: 'Example.Show.S02E04.mkv' } },
     addon,
     title: 'Breaking Bad',
     subtitle: 'S2 E4 · Down',
@@ -189,7 +189,7 @@ describe('nowPlayingFor', () => {
 
   it('never passes on the stream, its addon or its file', () => {
     const sent = JSON.stringify(nowPlayingFor(episode));
-    for (const secret of ['debrid', 'abc123', 'Torrentio', 'torrentio', '.mkv', 'S02E04']) {
+    for (const secret of ['files', 'abc123', 'Alpha', 'alpha', '.mkv', 'S02E04']) {
       assert.ok(!sent.includes(secret), `${secret} in ${sent}`);
     }
   });

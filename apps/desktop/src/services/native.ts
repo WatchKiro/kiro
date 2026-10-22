@@ -271,7 +271,7 @@ export interface StreamSettings {
   maxResolution: 2160 | 1080 | 720;
   /** Pick HDR and Dolby Vision versions first (SDR first when off). */
   preferHdr: boolean;
-  /** Pick streams a debrid service already has ready first. */
+  /** Pick streams their addon marks as cached (ready to start at once) first. */
   preferCached: boolean;
   /** Filter out cam, telesync and screener releases. */
   excludeCam: boolean;
@@ -363,7 +363,12 @@ export interface Profile {
   hasPin: boolean;
   /** Unix milliseconds. */
   createdAt: number;
+  /** Where it is with the first-run setup (`profiles::FirstRun`). */
+  firstRun: FirstRun;
 }
+
+/** `pending` until the profile's first-run setup is completed or skipped. */
+export type FirstRun = 'pending' | 'completed' | 'skipped';
 
 /** Every profile, oldest first, and the active one (`profiles::ProfilesOverview`). */
 export interface ProfilesOverview {
@@ -400,6 +405,9 @@ export const profileCommands = {
   /** Stops playback, then makes `id` the active profile (and the one opened next launch). */
   switchTo: (id: number, pin?: string) => invoke<ProfilesOverview>('profile_switch', { id, pin }),
   setShowPicker: (show: boolean) => invoke<ProfilesOverview>('profile_set_show_picker', { show }),
+  /** Records how the active profile's first-run setup ended, so it doesn't show again. */
+  finishFirstRun: (outcome: Exclude<FirstRun, 'pending'>) =>
+    invoke<ProfilesOverview>('profile_finish_first_run', { outcome }),
 };
 
 /**

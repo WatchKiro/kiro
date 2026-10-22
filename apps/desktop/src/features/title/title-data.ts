@@ -19,6 +19,29 @@ export function streamAddons(addons: InstalledAddon[], type: string, id: string)
   return addons.filter((addon) => supportsResource(addon.manifest, 'stream', type, id));
 }
 
+/** Whether an addon lists streams for anything at all. */
+export function providesStreams(addon: InstalledAddon) {
+  return addon.manifest.resources.some(
+    (entry) => (typeof entry === 'string' ? entry : entry.name) === 'stream',
+  );
+}
+
+/**
+ * Why a movie or episode has streams to load, or doesn't: `none` when no
+ * enabled addon provides streams for anything (Kiro has nothing to play
+ * until one is added), `other` when some do but not for this kind of title
+ * or id, otherwise `available`. Whether those addons then find any streams
+ * is up to them.
+ */
+export function streamAvailability(
+  addons: InstalledAddon[],
+  type: string,
+  id: string,
+): 'none' | 'other' | 'available' {
+  if (streamAddons(addons, type, id).length > 0) return 'available';
+  return addons.some(providesStreams) ? 'other' : 'none';
+}
+
 /**
  * Cache key for a title's metadata. It includes the addons that were asked, so
  * installing or removing a metadata addon refetches instead of serving a
@@ -37,8 +60,9 @@ export type StreamSource =
   { kind: 'playable'; url: string } | { kind: 'unavailable'; reason: string };
 
 /**
- * What Kiro can do with a stream. Only direct https URLs play for now; torrents,
- * YouTube and external links are listed but never opened.
+ * What Kiro can do with a stream. Only direct https URLs play; torrents (which
+ * Kiro doesn't support), YouTube and external links are listed but never
+ * opened.
  */
 export function classifyStream(stream: Stream): StreamSource {
   if (stream.url) {
@@ -46,7 +70,7 @@ export function classifyStream(stream: Stream): StreamSource {
       ? { kind: 'playable', url: stream.url }
       : { kind: 'unavailable', reason: 'Insecure (http) streams aren’t supported' };
   }
-  if (stream.infoHash) return { kind: 'unavailable', reason: 'Torrents aren’t supported yet' };
+  if (stream.infoHash) return { kind: 'unavailable', reason: 'Torrents aren’t supported' };
   if (stream.ytId) return { kind: 'unavailable', reason: 'YouTube isn’t supported yet' };
   return { kind: 'unavailable', reason: 'Opens outside Kiro — not supported' };
 }

@@ -7,7 +7,7 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::core::error::Result;
 use crate::core::state::AppState;
-use crate::profiles::{Avatar, Pin, ProfileId, ProfileName, ProfilesOverview};
+use crate::profiles::{Avatar, FirstRunOutcome, Pin, ProfileId, ProfileName, ProfilesOverview};
 
 /// Every profile, the active one, and whether the picker shows at launch.
 #[tauri::command]
@@ -98,4 +98,14 @@ pub async fn profile_set_show_picker(
     state: State<'_, AppState>,
 ) -> Result<ProfilesOverview> {
     state.profiles().set_show_picker(show)
+}
+
+/// Records how the active profile's first-run setup ended (`completed` or
+/// `skipped`), so it doesn't show again for it.
+#[tauri::command]
+pub async fn profile_finish_first_run(
+    outcome: FirstRunOutcome,
+    state: State<'_, AppState>,
+) -> Result<ProfilesOverview> {
+    state.profiles().finish_first_run(outcome)
 }
