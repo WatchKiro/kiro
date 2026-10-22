@@ -637,20 +637,35 @@ mod tests {
             .expect("player_set_now_playing should be permitted");
         }
 
-        // A preview position must be a non-negative number.
+        // A preview position must be a non-negative number, and its kind one
+        // of the known ones.
         for position in [json!(-1), json!(-0.5)] {
             assert_eq!(
                 code("player_preview", json!({ "position": position })),
                 "INVALID_ARGUMENT"
             );
         }
+        let error = app
+            .invoke(
+                "player_preview",
+                json!({ "position": 12.5, "kind": "urgent" }),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid args"), "{error}");
 
         // Valid arguments, but nothing is attached (the mock runtime has no video surface).
         assert_eq!(code("player_stats", json!({})), "PLAYER_NOT_ATTACHED");
-        assert_eq!(
-            code("player_preview", json!({ "position": 12.5 })),
-            "PLAYER_NOT_ATTACHED"
-        );
+        for kind in [
+            json!(null),
+            json!("hover"),
+            json!("prefetch"),
+            json!("warm"),
+        ] {
+            assert_eq!(
+                code("player_preview", json!({ "position": 12.5, "kind": kind })),
+                "PLAYER_NOT_ATTACHED"
+            );
+        }
         assert_eq!(
             code("player_set_paused", json!({ "paused": true })),
             "PLAYER_NOT_ATTACHED"

@@ -4,13 +4,18 @@ import { describe, it, mock } from 'node:test';
 import {
   BUSY_RETRY_MS,
   HOVER_DELAY_MS,
+  MAX_PREFETCHES,
+  NEAREST_CELLS,
+  PREFETCH_DELAY_MS,
   PreviewCache,
   PreviewScheduler,
+  WARM_INTERVAL_MS,
   parsePlayerPreview,
+  previewNeighbours,
   previewSlot,
   previewStep,
 } from '@/features/playback/seek-preview';
-import type { PlayerPreview } from '@/services/player';
+import type { PlayerPreview, PreviewKind } from '@/services/player';
 
 const IMAGE = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
 const frame = (position: number): PlayerPreview => ({ status: 'frame', position, image: IMAGE });
@@ -36,12 +41,21 @@ describe('previewStep and previewSlot', () => {
     // A last cell shorter than the step: its middle would be past the end.
     assert.deepEqual(previewSlot(61, 62), { index: 12, position: 61.5 });
   });
+
+  it('names the cells either side, the next one first, inside the video', () => {
+    assert.deepEqual(previewNeighbours(previewSlot(100, 2853), 2853), [
+      { index: 7, position: 112.5 },
+      { index: 5, position: 82.5 },
+    ]);
+    assert.deepEqual(previewNeighbours(previewSlot(0, 60), 60), [{ index: 1, position: 7.5 }]);
+    assert.deepEqual(previewNeighbours(previewSlot(60, 60), 60), [{ index: 10, position: 52.5 }]);
+  });
 });
 
 describe('parsePlayerPreview', () => {
   it('accepts what the core sends', () => {
     assert.deepEqual(parsePlayerPreview(frame(97.2)), frame(97.2));
-    for (const status of ['busy', 'superseded', 'unavailable'] as const) {
+    for (const status of ['busy', 'superseded', 'unavailable', 'warming'] as const) {
       assert.deepEqual(parsePlayerPreview({ status }), { status });
     }
   });
@@ -74,6 +88,18 @@ describe('PreviewCache', () => {
     assert.equal(cache.wants(4, 0), true);
   });
 
+  it('finds the nearest frame to stand in, the earlier of two equally near', () => {
+    const cache = new PreviewCache();
+    assert.equal(cache.nearest(5), undefined);
+    cache.record(3, frame(30), 0);
+    cache.record(7, frame(70), 0);
+    assert.deepEqual(cache.nearest(5), { frame: { image: IMAGE, position: 30 }, distance: 2 });
+    assert.deepEqual(cache.nearest(6), { frame: { image: IMAGE, position: 70 }, distance: 1 });
+    assert.deepEqual(cache.nearest(3), { frame: { image: IMAGE, position: 30 }, distance: 0 });
+    assert.equal(cache.nearest(0), undefined, `no further than ${NEAREST_CELLS} cells`);
+    assert.equal(cache.nearest(5, 1), undefined);
+  });
+
   it('waits after busy, and gives up when the stream cannot be previewed', () => {
     const cache = new PreviewCache();
     cache.record(1, { status: 'busy' }, 1000);
@@ -81,16 +107,40 @@ describe('PreviewCache', () => {
     assert.equal(cache.wants(2, 1000 + BUSY_RETRY_MS), true);
     cache.record(2, { status: 'superseded' }, 0);
     assert.equal(cache.wants(2, 1000 + BUSY_RETRY_MS), true);
+    assert.equal(cache.available, true);
     cache.record(2, { status: 'unavailable' }, 0);
     assert.equal(cache.wants(5, Number.MAX_SAFE_INTEGER), false);
+    assert.equal(cache.available, false);
+  });
+
+  it('keeps a prefetch refusal from holding up hovers, and a budget on prefetches', () => {
+    const cache = new PreviewCache();
+    cache.record(1, { status: 'busy' }, 1000, 'prefetch');
+    assert.equal(cache.wants(1, 1000), true, 'hovers still ask');
+    assert.equal(cache.wantsPrefetch(1, 1000), false);
+    assert.equal(cache.wantsPrefetch(1, 1000 + BUSY_RETRY_MS), true);
+    // A hover's refusal holds up both.
+    cache.record(1, { status: 'busy' }, 2000);
+    assert.equal(cache.wantsPrefetch(1, 2000), false);
+
+    const budgeted = new PreviewCache();
+    for (let index = 0; index < MAX_PREFETCHES; index++) {
+      budgeted.record(index, frame(index * 5), 0, 'prefetch');
+    }
+    assert.equal(budgeted.wantsPrefetch(100, 0), false, 'the budget is spent');
+    assert.equal(budgeted.wants(100, 0), true, 'hovers are not budgeted');
+    // Hovered frames don't count against it.
+    const hovered = new PreviewCache();
+    for (let index = 0; index < MAX_PREFETCHES; index++) hovered.record(index, frame(index * 5), 0);
+    assert.equal(hovered.wantsPrefetch(100, 0), true);
   });
 });
 
 /** A request whose answers the test hands out. */
 function fakeRequest() {
-  const calls: { position: number; resolve: (value: unknown) => void }[] = [];
-  const request = (position: number) =>
-    new Promise<unknown>((resolve) => calls.push({ position, resolve }));
+  const calls: { position: number; kind: PreviewKind; resolve: (value: unknown) => void }[] = [];
+  const request = (position: number, kind: PreviewKind) =>
+    new Promise<unknown>((resolve) => calls.push({ position, kind, resolve }));
   return { calls, request };
 }
 
@@ -166,6 +216,38 @@ describe('PreviewScheduler', () => {
     mock.timers.enable({ apis: ['setTimeout'] });
     try {
       let now = 0;
+      let answers = 0;
+      const cache = new PreviewCache();
+      const { calls, request } = fakeRequest();
+      const scheduler = new PreviewScheduler(
+        cache,
+        request,
+        () => answers++,
+        () => now,
+      );
+      scheduler.want({ index: 2, position: 22.5 });
+      mock.timers.tick(HOVER_DELAY_MS);
+      calls[0]?.resolve({ status: 'busy' });
+      await settle();
+      // Told, so the bar can stop showing a frame as on its way.
+      assert.equal(answers, 1);
+      assert.equal(scheduler.paused, true);
+      now = BUSY_RETRY_MS;
+      mock.timers.tick(BUSY_RETRY_MS);
+      assert.equal(calls.length, 2);
+      assert.equal(scheduler.paused, false);
+      calls[1]?.resolve(frame(20));
+      await settle();
+      assert.ok(cache.get(2));
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it('prefetches the cells either side once the pointer has rested on one it has', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let now = 0;
       const cache = new PreviewCache();
       const { calls, request } = fakeRequest();
       const scheduler = new PreviewScheduler(
@@ -174,19 +256,104 @@ describe('PreviewScheduler', () => {
         () => undefined,
         () => now,
       );
-      scheduler.want({ index: 2, position: 22.5 });
+      const neighbours = [
+        { index: 3, position: 37.5 },
+        { index: 1, position: 7.5 },
+      ];
+      scheduler.want({ index: 2, position: 22.5 }, neighbours);
       mock.timers.tick(HOVER_DELAY_MS);
-      calls[0]?.resolve({ status: 'busy' });
+      now = HOVER_DELAY_MS;
+      calls[0]?.resolve(frame(20));
       await settle();
-      now = BUSY_RETRY_MS;
-      mock.timers.tick(BUSY_RETRY_MS);
-      assert.equal(calls.length, 2);
-      calls[1]?.resolve(frame(20));
+      assert.equal(calls.length, 1, 'not before the pointer has rested');
+
+      now = PREFETCH_DELAY_MS;
+      mock.timers.tick(PREFETCH_DELAY_MS - HOVER_DELAY_MS);
+      assert.deepEqual(
+        calls.map((call) => [call.position, call.kind]),
+        [
+          [22.5, 'hover'],
+          [37.5, 'prefetch'],
+        ],
+      );
+      // The other side follows straight away...
+      calls[1]?.resolve(frame(35));
       await settle();
-      assert.ok(cache.get(2));
+      assert.equal(calls[2]?.position, 7.5);
+      assert.equal(calls[2]?.kind, 'prefetch');
+      // ...and the pointer moving on to a prefetched cell finds it ready.
+      calls[2]?.resolve(frame(5));
+      await settle();
+      assert.equal(calls.length, 3);
+      scheduler.want({ index: 3, position: 37.5 }, [{ index: 4, position: 52.5 }]);
+      mock.timers.tick(HOVER_DELAY_MS);
+      assert.equal(calls.length, 3, 'already there');
+      assert.deepEqual(cache.get(3), { image: IMAGE, position: 35 });
     } finally {
       mock.timers.reset();
     }
+  });
+
+  it('gives a hover priority over a prefetch, and lets a refused prefetch be', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let now = 0;
+      const cache = new PreviewCache();
+      cache.record(2, frame(20), 0);
+      const { calls, request } = fakeRequest();
+      const scheduler = new PreviewScheduler(
+        cache,
+        request,
+        () => undefined,
+        () => now,
+      );
+      scheduler.want({ index: 2, position: 22.5 }, [{ index: 3, position: 37.5 }]);
+      now = PREFETCH_DELAY_MS;
+      mock.timers.tick(PREFETCH_DELAY_MS);
+      assert.equal(calls[0]?.kind, 'prefetch');
+      // The pointer moves while the prefetch is made: its cell comes next.
+      scheduler.want({ index: 9, position: 142.5 }, []);
+      mock.timers.tick(HOVER_DELAY_MS);
+      assert.equal(calls.length, 1, 'one at a time');
+      calls[0]?.resolve({ status: 'busy' });
+      await settle();
+      assert.equal(calls[1]?.position, 142.5);
+      assert.equal(calls[1]?.kind, 'hover');
+      assert.equal(scheduler.paused, false, 'a prefetch refusal is not a hover one');
+      calls[1]?.resolve(frame(140));
+      await settle();
+      // Resting here: nothing to prefetch, and the refused one is not retried.
+      now += PREFETCH_DELAY_MS;
+      mock.timers.tick(PREFETCH_DELAY_MS);
+      assert.equal(calls.length, 2);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it('warms the core at most once in a while, and not for a stream that cannot be previewed', () => {
+    let now = 0;
+    const cache = new PreviewCache();
+    const { calls, request } = fakeRequest();
+    const scheduler = new PreviewScheduler(
+      cache,
+      request,
+      () => undefined,
+      () => now,
+    );
+    scheduler.warm();
+    scheduler.warm();
+    assert.deepEqual(
+      calls.map((call) => call.kind),
+      ['warm'],
+    );
+    now = WARM_INTERVAL_MS;
+    scheduler.warm();
+    assert.equal(calls.length, 2);
+    cache.record(1, { status: 'unavailable' }, now);
+    now += WARM_INTERVAL_MS;
+    scheduler.warm();
+    assert.equal(calls.length, 2);
   });
 
   it('treats a failed or malformed answer as nothing to show', async () => {

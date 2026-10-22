@@ -26,6 +26,7 @@ import {
 
 import { MAX_AUDIO_DELAY, MAX_SUBTITLE_DELAY, clampSpeed } from '@/features/playback/timing';
 import type {
+  BufferedRange,
   NativePlayerEvent,
   NowPlaying,
   PlayerBridge,
@@ -43,6 +44,8 @@ export interface NativePlayerView {
   bufferingProgress: number | null;
   tracks: readonly MediaTrack[];
   chapters: readonly Chapter[];
+  /** Where seeking is instant: what the player holds, in order. */
+  buffered: readonly BufferedRange[];
   audioTrackId: string | null;
   subtitleTrackId: string | null;
   volume: number;
@@ -114,6 +117,7 @@ export class NativePlayer implements MediaPlayer {
     bufferingProgress: null,
     tracks: [],
     chapters: [],
+    buffered: [],
     audioTrackId: null,
     subtitleTrackId: null,
     volume: 1,
@@ -388,6 +392,9 @@ export class NativePlayer implements MediaPlayer {
       case 'timingChange':
         // Not a `PlayerEventMap` event: the view alone carries it.
         this.update(message.payload);
+        return;
+      case 'bufferedChange':
+        this.update({ buffered: message.payload.ranges });
         return;
       case 'error':
         this.emitter.emit('error', { error: fromFailure(message.payload.error) });

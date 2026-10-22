@@ -14,6 +14,7 @@ const SNAPSHOT: PlayerSnapshot = {
   buffering: false,
   tracks: [],
   chapters: [],
+  buffered: [],
   audioTrackId: null,
   subtitleTrackId: null,
   volume: 1,
@@ -177,6 +178,20 @@ describe('NativePlayer', () => {
       [player.getView().subtitleDelay, player.getView().audioDelay, player.getView().speed],
       [0.3, -0.2, 2],
     );
+  });
+
+  it('carries what is buffered in the view', async () => {
+    const { bridge, emit } = fakeBridge();
+    const player = await NativePlayer.create(bridge);
+    assert.deepEqual(player.getView().buffered, []);
+    const ranges = [
+      { start: 0, end: 12 },
+      { start: 1498.5, end: 1540.2 },
+    ];
+    emit({ event: 'bufferedChange', payload: { ranges } });
+    assert.deepEqual(player.getView().buffered, ranges);
+    emit({ event: 'bufferedChange', payload: { ranges: [] } });
+    assert.deepEqual(player.getView().buffered, []);
   });
 
   it('turns failures into PlayerErrors', async () => {

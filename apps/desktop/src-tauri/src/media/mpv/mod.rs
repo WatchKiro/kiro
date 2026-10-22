@@ -52,7 +52,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Runtime, WebviewWindow};
 
 use super::keep_awake::{KeepAwake, Transition};
@@ -300,6 +300,23 @@ pub enum PreviewResult {
     Superseded,
     /// Nothing can be previewed for this stream.
     Unavailable,
+    /// The stream is being opened in the preview core ([`PreviewKind::Warm`]).
+    Warming,
+}
+
+/// What a preview is asked for. Mirrors `PreviewKind` in
+/// `apps/desktop/src/services/player.ts`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreviewKind {
+    /// The pointer is on it: made as soon as the player has a little buffered.
+    #[default]
+    Hover,
+    /// Next to where the pointer rests, for when it moves on: only while the
+    /// player has plenty buffered.
+    Prefetch,
+    /// No frame: open the stream in the preview core, for the first hover.
+    Warm,
 }
 
 impl MpvPlayer {
@@ -497,11 +514,21 @@ impl MpvPlayer {
 
     /// A seek-bar preview at `position` seconds of the stream that is
     /// playing. Refused ([`PreviewResult::Busy`]) while that could hold up
-    /// playback ([`preview::could_stall_playback`]). Blocks while the frame
-    /// is made: call it off the async runtime.
-    pub fn preview(&self, position: f64) -> PreviewResult {
-        if preview::could_stall_playback(&self.buffer_state()) {
+    /// playback ([`preview::could_stall_playback`]; a prefetch needs more
+    /// buffered). Blocks while the frame is made: call it off the async
+    /// runtime. [`PreviewKind::Warm`] only opens the stream, and returns at
+    /// once.
+    pub fn preview(&self, position: f64, kind: PreviewKind) -> PreviewResult {
+        let min_buffer = match kind {
+            PreviewKind::Hover | PreviewKind::Warm => preview::MIN_BUFFER_SECONDS,
+            PreviewKind::Prefetch => preview::PREFETCH_MIN_BUFFER_SECONDS,
+        };
+        if preview::could_stall_playback(&self.buffer_state(), min_buffer) {
             return PreviewResult::Busy;
+        }
+        if kind == PreviewKind::Warm {
+            self.previewer.warm();
+            return PreviewResult::Warming;
         }
         match self.previewer.request(position) {
             Outcome::Frame(frame) => {

@@ -21,8 +21,8 @@ use crate::media::model::{Change, FailureCode, PlayerFailure};
 use crate::media::passthrough::FALLBACK_MESSAGE;
 
 /// Properties the player observes, by observation id (index + 1). Formats are
-/// limited to what [`client`] decodes in events (no `Node`): `track-list`
-/// arrives as a JSON string.
+/// limited to what [`client`] decodes in events (no `Node`): `track-list`,
+/// `chapter-list` and `demuxer-cache-state` arrive as JSON strings.
 const OBSERVED: &[(&str, Format)] = &[
     ("idle-active", Format::Flag),
     ("pause", Format::Flag),
@@ -33,6 +33,7 @@ const OBSERVED: &[(&str, Format)] = &[
     ("cache-buffering-state", Format::Int64),
     ("track-list", Format::String),
     ("chapter-list", Format::String),
+    ("demuxer-cache-state", Format::String),
     ("volume", Format::Double),
     ("mute", Format::Flag),
     ("sub-delay", Format::Double),
@@ -168,6 +169,7 @@ fn property_change(name: &str, data: PropertyData) -> Option<Change> {
         ("cache-buffering-state", Int64(value)) => Change::CacheBufferingState(value),
         ("track-list", Str(json)) => Change::TrackList(json),
         ("chapter-list", Str(json)) => Change::ChapterList(json),
+        ("demuxer-cache-state", Str(json)) => Change::CacheState(json),
         ("volume", Double(value)) => Change::Volume(value),
         ("mute", Flag(value)) => Change::Muted(value),
         ("sub-delay", Double(value)) => Change::SubtitleDelay(value),

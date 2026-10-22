@@ -21,6 +21,8 @@ export interface PlayerSnapshot {
   tracks: MediaTrack[];
   /** Ordered by start, at most `media::model::MAX_CHAPTERS`. */
   chapters: Chapter[];
+  /** The parts of the file the player holds, where seeking is instant. */
+  buffered: BufferedRange[];
   audioTrackId: string | null;
   subtitleTrackId: string | null;
   /** 0 to `maxVolume`, where 1 is unity gain. */
@@ -33,6 +35,12 @@ export interface PlayerSnapshot {
   audioDelay: number;
   /** Playback speed, where 1 is normal. */
   speed: number;
+}
+
+/** A buffered stretch of the file, in seconds (`media::model::BufferedRange`). */
+export interface BufferedRange {
+  start: number;
+  end: number;
 }
 
 /** Mirrors `PlayerEvent::TimingChange`: the native player's delays and speed. */
@@ -51,11 +59,13 @@ export interface PlayerFailure {
 
 /**
  * Payloads as sent by Rust: `PlayerEventMap`, with errors as plain data, plus
- * `timingChange`, which only the native player has.
+ * `timingChange` and `bufferedChange`, which only the native player has.
  */
 export type NativeEventMap = Omit<PlayerEventMap, 'error'> & {
   error: { error: PlayerFailure };
   timingChange: PlayerTiming;
+  /** `PlayerEvent::BufferedChange`, at most once a second. */
+  bufferedChange: { ranges: BufferedRange[] };
 };
 
 /** Mirrors `media::model::PlayerEvent`: one `PlayerEventMap` entry. */
@@ -150,11 +160,21 @@ export type PlayerPreview =
   /** A newer request replaced this one. */
   | { status: 'superseded' }
   /** Nothing to preview for this stream (or the setting is off). */
-  | { status: 'unavailable' };
+  | { status: 'unavailable' }
+  /** The preview core is opening the stream (`warm`). */
+  | { status: 'warming' };
+
+/**
+ * What a preview is asked for (`media::mpv::PreviewKind`): the cell under
+ * the pointer, one next to it for when the pointer moves on (made only while
+ * the player has plenty buffered), or no frame at all, just to get the
+ * preview core ready.
+ */
+export type PreviewKind = 'hover' | 'prefetch' | 'warm';
 
 /** A frame at `position` seconds for the seek bar. Resolves to `unknown`: check it with `parsePlayerPreview`. */
-export function previewCommand(position: number): Promise<unknown> {
-  return invoke<unknown>('player_preview', { position });
+export function previewCommand(position: number, kind: PreviewKind = 'hover'): Promise<unknown> {
+  return invoke<unknown>('player_preview', { position, kind });
 }
 
 export const tauriPlayerBridge: PlayerBridge = {

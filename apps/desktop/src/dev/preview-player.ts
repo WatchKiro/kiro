@@ -98,6 +98,8 @@ let tracks: MediaTrack[] = [];
 let chapters: Chapter[] = [];
 let audioTrackId: string | null = null;
 let subtitleTrackId: string | null = null;
+/** Buffered from a seek, filling 3× faster than playback. */
+let buffered: { start: number; end: number } | null = null;
 /** Subtitle files added so far, for unique track ids. */
 let added = 0;
 let subtitleDelay = 0;
@@ -122,6 +124,10 @@ function setState(next: PlaybackState) {
     clock = window.setInterval(() => {
       position = Math.min(position + speed, DURATION);
       emit({ event: 'timeUpdate', payload: { position, duration } });
+      if (buffered && buffered.end < DURATION) {
+        buffered = { start: buffered.start, end: Math.min(buffered.end + 3, DURATION) };
+        emit({ event: 'bufferedChange', payload: { ranges: [buffered] } });
+      }
       if (dropAt !== null && position >= dropAt) {
         fail('The connection was lost');
         return;
@@ -187,6 +193,7 @@ function snapshot(): PlayerSnapshot {
     buffering: false,
     tracks,
     chapters,
+    buffered: buffered ? [buffered] : [],
     audioTrackId,
     subtitleTrackId,
     volume,
@@ -238,6 +245,10 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
       chapters = [];
       emit({ event: 'chaptersChange', payload: { chapters } });
     }
+    if (buffered) {
+      buffered = null;
+      emit({ event: 'bufferedChange', payload: { ranges: [] } });
+    }
     setState('loading');
     if (source.searchParams.has('dead')) {
       showStill(false);
@@ -250,8 +261,10 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
       audioTrackId = 'a1';
       subtitleTrackId = null;
       chapters = fileChapters();
+      buffered = { start: position, end: Math.min(position + 4, DURATION) };
       emit({ event: 'tracksChange', payload: { tracks } });
       emit({ event: 'chaptersChange', payload: { chapters } });
+      emit({ event: 'bufferedChange', payload: { ranges: [buffered] } });
       emit({ event: 'trackSelect', payload: { kind: 'audio', trackId: audioTrackId } });
       emit({ event: 'timeUpdate', payload: { position, duration } });
       showStill(true);
@@ -262,6 +275,11 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
   player_seek: ({ seconds }) => {
     position = Math.min(Math.max(Number(seconds), 0), DURATION);
     emit({ event: 'timeUpdate', payload: { position, duration } });
+    // Seeking outside what's buffered starts the buffer again from there.
+    if (!buffered || position < buffered.start || position > buffered.end) {
+      buffered = { start: position, end: Math.min(position + 2, DURATION) };
+      emit({ event: 'bufferedChange', payload: { ranges: [buffered] } });
+    }
   },
   player_set_volume: ({ volume: next }) => {
     volume = Number(next);
@@ -330,13 +348,14 @@ export const playerHandlers: Record<string, (args: Args) => unknown> = {
     return track;
   },
   player_stats: () => STATS,
-  player_preview: async ({ position }) => {
+  player_preview: async ({ position, kind }) => {
     let mode: string | null = null;
     try {
       mode = localStorage.getItem('kiro.preview.previews');
     } catch {
       // No storage: the default.
     }
+    if (kind === 'warm') return { status: 'warming' };
     await new Promise((resolve) => window.setTimeout(resolve, mode === 'slow' ? 1500 : 180));
     if (mode === 'busy') return { status: 'busy' };
     if (mode === 'unavailable' || duration === null) return { status: 'unavailable' };

@@ -16,7 +16,9 @@ use tauri::{Runtime, State, WebviewWindow};
 use crate::core::error::{Error, Result};
 use crate::core::state::AppState;
 use crate::media::model::{MediaTrack, PlayerEvent, PlayerSnapshot};
-use crate::media::mpv::{DebugStats, EventSink, MpvPlayer, PreviewResult, debug_log_enabled};
+use crate::media::mpv::{
+    DebugStats, EventSink, MpvPlayer, PreviewKind, PreviewResult, debug_log_enabled,
+};
 use crate::media::{
     ExternalSubtitle, MediaSource, PlaybackBackend, PlaybackError, SubtitleStyle, audio_delay,
     parse_stream_url, parse_track_id, playback_speed, subtitle_delay,
@@ -477,11 +479,13 @@ fn seek_previews(app: &AppState) -> bool {
 }
 
 /// A frame of the stream at `position` seconds, for the seek bar
-/// (`media::mpv::preview`). `unavailable` while the setting is off. `async`:
-/// making a frame reads part of the stream.
+/// (`media::mpv::preview`); `kind` (default `hover`) says how urgent it is,
+/// or (`warm`) only to get the preview core ready. `unavailable` while the
+/// setting is off. `async`: making a frame reads part of the stream.
 #[tauri::command]
 pub async fn player_preview(
     position: f64,
+    kind: Option<PreviewKind>,
     state: State<'_, PlayerState>,
     app: State<'_, AppState>,
 ) -> Result<PreviewResult> {
@@ -493,8 +497,9 @@ pub async fn player_preview(
     if !seek_previews(&app) {
         return Ok(PreviewResult::Unavailable);
     }
+    let kind = kind.unwrap_or_default();
     let player = state.get()?;
-    let result = blocking(move || Ok(player.preview(position))).await;
+    let result = blocking(move || Ok(player.preview(position, kind))).await;
     if debug_log_enabled()
         && let Ok(result) = &result
     {
@@ -504,7 +509,7 @@ pub async fn player_preview(
             }
             other => format!("{other:?}"),
         };
-        eprintln!("[kiro-player] player_preview({position:.1}) -> {status}");
+        eprintln!("[kiro-player] player_preview({position:.1}, {kind:?}) -> {status}");
     }
     result
 }

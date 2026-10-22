@@ -362,7 +362,12 @@ async function exercisePreviews(player: NativePlayer, navigate: (to: string) => 
   await waitForState(player, 'playing');
   await previewCommand(60).catch(() => undefined);
   await sleep(15_000);
+  // Warming opens the stream ahead; the first frame then only seeks.
+  await previewCommand(0, 'warm').catch(() => undefined);
+  await sleep(3000);
   for (const position of [20, 60, 100]) await previewCommand(position).catch(() => undefined);
+  // A prefetch needs more buffered than a hover.
+  await previewCommand(80, 'prefetch').catch(() => undefined);
   await Promise.all(
     [30, 50, 70].map((position) => previewCommand(position).catch(() => undefined)),
   );

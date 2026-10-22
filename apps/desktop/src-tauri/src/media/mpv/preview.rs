@@ -10,11 +10,12 @@
 //! demand, one at a time, and [`MpvPlayer::preview`](super::MpvPlayer::preview)
 //! refuses while the player is short of buffered video.
 //!
-//! The core lives on its own thread, created on the first request and freed
-//! after [`IDLE_RELEASE`] without one, so its memory (150 to 250 MB for a 4K
-//! stream) is only held while someone is scrubbing. A request that arrives
-//! while another waits replaces it ([`Outcome::Superseded`]): only the
-//! position under the pointer matters.
+//! The core lives on its own thread, created on the first request (or on
+//! [`Previewer::warm`], when the pointer reaches the seek bar, so the first
+//! frame comes sooner) and freed after [`IDLE_RELEASE`] without one, so its
+//! memory (150 to 250 MB for a 4K stream) is only held while someone is
+//! scrubbing. A request that arrives while another waits replaces it
+//! ([`Outcome::Superseded`]): only the position under the pointer matters.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,6 +75,8 @@ struct Queue {
     /// The stream the player has loaded, if previews can be made of it.
     source: Option<String>,
     pending: Option<Pending>,
+    /// Open the stream now, ahead of a request.
+    warm: bool,
 }
 
 impl Queue {
@@ -83,6 +86,20 @@ impl Queue {
             let _ = older.reply.send(Outcome::Superseded);
         }
     }
+
+    /// The next thing to do, a request first.
+    fn take(&mut self) -> Option<Job> {
+        if let Some(pending) = self.pending.take() {
+            return Some(Job::Preview(pending));
+        }
+        std::mem::take(&mut self.warm).then_some(Job::Warm)
+    }
+}
+
+/// What the worker thread does next.
+enum Job {
+    Preview(Pending),
+    Warm,
 }
 
 struct Shared {
@@ -125,6 +142,13 @@ impl Previewer {
     /// pattern or nothing loaded).
     pub fn set_source(&self, source: Option<String>) {
         self.shared.queue().source = source;
+        self.shared.wake.notify_one();
+    }
+
+    /// Opens the stream in the preview core now, if it isn't open, so the
+    /// first preview asked for doesn't wait for that. Returns at once.
+    pub fn warm(&self) {
+        self.shared.queue().warm = true;
         self.shared.wake.notify_one();
     }
 
@@ -185,10 +209,13 @@ impl Worker {
 
     fn run(mut self) {
         loop {
-            let (pending, source) = {
+            let (job, source) = {
                 let mut queue = self.shared.queue();
                 let idle_since = Instant::now();
-                while queue.pending.is_none() && !self.shared.stop.load(Ordering::Acquire) {
+                while queue.pending.is_none()
+                    && !queue.warm
+                    && !self.shared.stop.load(Ordering::Acquire)
+                {
                     let waited = idle_since.elapsed();
                     if waited >= IDLE_RELEASE {
                         if let Some(core) = self.core.take() {
@@ -218,16 +245,25 @@ impl Worker {
                 if self.shared.stop.load(Ordering::Acquire) {
                     break;
                 }
-                let Some(pending) = queue.pending.take() else {
+                let Some(job) = queue.take() else {
                     continue;
                 };
-                (pending, queue.source.clone())
+                (job, queue.source.clone())
             };
-            let outcome = match source {
-                Some(source) => self.preview(&source, pending.position),
-                None => Outcome::Unavailable,
-            };
-            let _ = pending.reply.send(outcome);
+            match job {
+                Job::Preview(pending) => {
+                    let outcome = match source {
+                        Some(source) => self.preview(&source, pending.position),
+                        None => Outcome::Unavailable,
+                    };
+                    let _ = pending.reply.send(outcome);
+                }
+                Job::Warm => {
+                    if let Some(source) = source {
+                        self.ensure_open(&source);
+                    }
+                }
+            }
         }
         // Answer anything still waiting, then free the core.
         if let Some(pending) = self.shared.queue().pending.take() {
@@ -239,28 +275,38 @@ impl Worker {
         }
     }
 
-    fn preview(&mut self, source: &str, position: f64) -> Outcome {
+    /// Has `source` open in the core, unless it has failed before. Returns
+    /// whether it is.
+    fn ensure_open(&mut self, source: &str) -> bool {
         if self.failed.as_deref() == Some(source) {
-            return Outcome::Unavailable;
+            return false;
+        }
+        if self.core.as_ref().is_some_and(|core| core.source == source) {
+            return true;
         }
         let started = Instant::now();
-        if self.core.as_ref().is_none_or(|core| core.source != source) {
-            match self.open(source) {
-                Ok(core) => {
-                    self.failed = None;
-                    self.failures = 0;
-                    if debug_log_enabled() {
-                        eprintln!("[kiro-preview] opened in {:?}", started.elapsed());
-                    }
-                    self.core = Some(core);
+        match self.open(source) {
+            Ok(core) => {
+                self.failed = None;
+                self.failures = 0;
+                if debug_log_enabled() {
+                    eprintln!("[kiro-preview] opened in {:?}", started.elapsed());
                 }
-                Err(error) => {
-                    eprintln!("[kiro-preview] could not open the stream: {error}");
-                    self.core = None;
-                    self.failed = Some(source.to_owned());
-                    return Outcome::Unavailable;
-                }
+                self.core = Some(core);
+                true
             }
+            Err(error) => {
+                eprintln!("[kiro-preview] could not open the stream: {error}");
+                self.core = None;
+                self.failed = Some(source.to_owned());
+                false
+            }
+        }
+    }
+
+    fn preview(&mut self, source: &str, position: f64) -> Outcome {
+        if !self.ensure_open(source) {
+            return Outcome::Unavailable;
         }
         let Some(dir) = self.frames_dir() else {
             return Outcome::Unavailable;
@@ -519,9 +565,9 @@ fn wait_for(
 
 /// Whether making a preview now could hold up playback. Previews download
 /// part of the stream, so they wait while the player is buffering, or has
-/// less than [`MIN_BUFFER_SECONDS`] of a network stream buffered (or less
+/// less than `min_buffer` seconds of a network stream buffered (or less
 /// than what's left of it, near the end).
-pub fn could_stall_playback(buffer: &BufferState) -> bool {
+pub fn could_stall_playback(buffer: &BufferState, min_buffer: f64) -> bool {
     if buffer.buffering {
         return true;
     }
@@ -530,13 +576,16 @@ pub fn could_stall_playback(buffer: &BufferState) -> bool {
     }
     let left = match (buffer.position, buffer.duration) {
         (Some(position), Some(duration)) => (duration - position - 1.0).max(0.0),
-        _ => MIN_BUFFER_SECONDS,
+        _ => min_buffer,
     };
-    buffer.cached_seconds.unwrap_or(0.0) < MIN_BUFFER_SECONDS.min(left)
+    buffer.cached_seconds.unwrap_or(0.0) < min_buffer.min(left)
 }
 
-/// Buffered video a network stream must have before previews are made.
+/// Buffered video a network stream must have before a preview the pointer
+/// is waiting for is made.
 pub const MIN_BUFFER_SECONDS: f64 = 10.0;
+/// ...and before one made ahead of the pointer (a prefetch), which can wait.
+pub const PREFETCH_MIN_BUFFER_SECONDS: f64 = 20.0;
 
 /// The player's buffer, for [`could_stall_playback`].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -565,32 +614,47 @@ mod tests {
         }
     }
 
+    fn stalls(buffer: &BufferState) -> bool {
+        could_stall_playback(buffer, MIN_BUFFER_SECONDS)
+    }
+
     #[test]
     fn previews_wait_for_a_buffer() {
-        assert!(!could_stall_playback(&network(12.0, 100.0, 2800.0)));
-        assert!(could_stall_playback(&network(4.0, 100.0, 2800.0)));
-        assert!(could_stall_playback(&BufferState {
+        assert!(!stalls(&network(12.0, 100.0, 2800.0)));
+        assert!(stalls(&network(4.0, 100.0, 2800.0)));
+        assert!(stalls(&BufferState {
             buffering: true,
             ..network(30.0, 100.0, 2800.0)
         }));
         // Nothing known about the buffer yet.
-        assert!(could_stall_playback(&BufferState {
+        assert!(stalls(&BufferState {
             via_network: true,
             ..BufferState::default()
         }));
     }
 
     #[test]
+    fn prefetches_wait_for_more() {
+        let buffer = network(15.0, 100.0, 2800.0);
+        assert!(!could_stall_playback(&buffer, MIN_BUFFER_SECONDS));
+        assert!(could_stall_playback(&buffer, PREFETCH_MIN_BUFFER_SECONDS));
+        assert!(!could_stall_playback(
+            &network(25.0, 100.0, 2800.0),
+            PREFETCH_MIN_BUFFER_SECONDS
+        ));
+    }
+
+    #[test]
     fn near_the_end_what_is_left_is_enough() {
         // 6 s left, 5.5 s buffered: all there is.
-        assert!(!could_stall_playback(&network(5.5, 2794.0, 2800.0)));
-        assert!(!could_stall_playback(&network(0.0, 2799.5, 2800.0)));
-        assert!(could_stall_playback(&network(2.0, 2790.0, 2800.0)));
+        assert!(!stalls(&network(5.5, 2794.0, 2800.0)));
+        assert!(!stalls(&network(0.0, 2799.5, 2800.0)));
+        assert!(stalls(&network(2.0, 2790.0, 2800.0)));
     }
 
     #[test]
     fn local_media_never_waits() {
-        assert!(!could_stall_playback(&BufferState::default()));
+        assert!(!stalls(&BufferState::default()));
     }
 
     #[test]
@@ -609,6 +673,21 @@ mod tests {
         assert_eq!(first.try_recv(), Ok(Outcome::Superseded));
         assert!(second.try_recv().is_err(), "the newer one waits its turn");
         assert_eq!(queue.pending.map(|pending| pending.position), Some(20.0));
+    }
+
+    #[test]
+    fn a_request_comes_before_warming() {
+        let mut queue = Queue::default();
+        assert!(queue.take().is_none());
+        queue.warm = true;
+        let (reply, _answer) = mpsc::channel();
+        queue.push(Pending {
+            position: 10.0,
+            reply,
+        });
+        assert!(matches!(queue.take(), Some(Job::Preview(_))));
+        assert!(matches!(queue.take(), Some(Job::Warm)));
+        assert!(queue.take().is_none(), "warming is done once");
     }
 
     /// A 10 s, 128×72 H.264 video with a keyframe every 2 s (made with
@@ -748,6 +827,27 @@ mod tests {
         let after_first = sent.load(Ordering::Relaxed);
         assert_eq!(previewer.request(7.0), Outcome::Unavailable);
         assert_eq!(sent.load(Ordering::Relaxed), after_first);
+    }
+
+    #[test]
+    fn warming_opens_the_stream_ahead_of_the_first_request() {
+        let (url, sent) = serve(FIXTURE);
+        let previewer = Previewer::new().unwrap();
+        // Without a stream there is nothing to open.
+        previewer.warm();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(sent.load(Ordering::Relaxed), 0);
+
+        previewer.set_source(Some(url));
+        previewer.warm();
+        let deadline = Instant::now() + OPEN_TIMEOUT;
+        while sent.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(sent.load(Ordering::Relaxed) > 0, "warming read the stream");
+        // Already open: the request only seeks and decodes.
+        let frame = frame(previewer.request(5.0));
+        assert!((frame.position - 4.0).abs() < 0.2);
     }
 
     #[test]

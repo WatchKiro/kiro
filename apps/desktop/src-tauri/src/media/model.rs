@@ -15,6 +15,11 @@ use serde::{Deserialize, Serialize};
 /// Minimum interval between `timeUpdate` events while playing. mpv reports
 /// `time-pos` on every frame; the UI only needs a few updates per second.
 pub const TIME_UPDATE_INTERVAL: Duration = Duration::from_millis(250);
+/// Least time between `bufferedChange` events: the buffered ranges change
+/// with every packet read.
+pub const BUFFERED_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
+/// Buffered ranges kept, at most (a file read in many places).
+const MAX_BUFFERED_RANGES: usize = 32;
 
 /// Upper bound for volume, where `1.0` is unity gain (mpv's `volume-max=130`).
 pub const MAX_VOLUME: f64 = 1.3;
@@ -105,6 +110,13 @@ pub struct PlayerFailure {
     pub recoverable: bool,
 }
 
+/// A stretch of the file in the demuxer's cache, in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct BufferedRange {
+    pub start: f64,
+    pub end: f64,
+}
+
 /// One entry of `PlayerEventMap`: `{ "event": <name>, "payload": <payload> }`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "event", content = "payload", rename_all = "camelCase")]
@@ -126,6 +138,10 @@ pub enum PlayerEvent {
     },
     ChaptersChange {
         chapters: Vec<Chapter>,
+    },
+    /// The parts of the file the demuxer holds, so seeking there is instant.
+    BufferedChange {
+        ranges: Vec<BufferedRange>,
     },
     #[serde(rename_all = "camelCase")]
     TrackSelect {
@@ -161,6 +177,7 @@ pub struct PlayerSnapshot {
     pub buffering: bool,
     pub tracks: Vec<MediaTrack>,
     pub chapters: Vec<Chapter>,
+    pub buffered: Vec<BufferedRange>,
     pub audio_track_id: Option<String>,
     pub subtitle_track_id: Option<String>,
     pub volume: f64,
@@ -197,6 +214,8 @@ pub enum Change {
     TrackList(String),
     /// mpv's `chapter-list`, as JSON.
     ChapterList(String),
+    /// mpv's `demuxer-cache-state`, as JSON.
+    CacheState(String),
     /// mpv volume, 0–130.
     Volume(f64),
     Muted(bool),
@@ -224,6 +243,7 @@ pub struct PlayerModel {
     cache_percent: Option<i64>,
     tracks: Vec<MediaTrack>,
     chapters: Vec<Chapter>,
+    buffered: Vec<BufferedRange>,
     audio: Option<String>,
     subtitle: Option<String>,
     volume: f64,
@@ -234,6 +254,9 @@ pub struct PlayerModel {
     /// When the last `timeUpdate` went out, and whether one is being held back.
     last_time_update: Option<Instant>,
     time_pending: bool,
+    /// The same for `bufferedChange`.
+    last_buffered_update: Option<Instant>,
+    buffered_pending: bool,
 }
 
 impl Default for PlayerModel {
@@ -252,6 +275,7 @@ impl Default for PlayerModel {
             cache_percent: None,
             tracks: Vec::new(),
             chapters: Vec::new(),
+            buffered: Vec::new(),
             audio: None,
             subtitle: None,
             volume: 1.0,
@@ -261,6 +285,8 @@ impl Default for PlayerModel {
             speed: 1.0,
             last_time_update: None,
             time_pending: false,
+            last_buffered_update: None,
+            buffered_pending: false,
         }
     }
 }
@@ -291,6 +317,7 @@ impl PlayerModel {
             buffering: self.buffering,
             tracks: self.tracks.clone(),
             chapters: self.chapters.clone(),
+            buffered: self.buffered.clone(),
             audio_track_id: self.audio.clone(),
             subtitle_track_id: self.subtitle.clone(),
             volume: self.volume,
@@ -323,6 +350,12 @@ impl PlayerModel {
                     events.push(PlayerEvent::ChaptersChange {
                         chapters: Vec::new(),
                     });
+                }
+                if !self.buffered.is_empty() {
+                    self.buffered.clear();
+                    self.buffered_pending = false;
+                    self.last_buffered_update = Some(now);
+                    events.push(PlayerEvent::BufferedChange { ranges: Vec::new() });
                 }
             }
             Change::FileLoaded => {
@@ -407,6 +440,13 @@ impl PlayerModel {
                     });
                 }
             }
+            Change::CacheState(json) => {
+                let buffered = parse_cache_state(&json);
+                if buffered != self.buffered {
+                    self.buffered = buffered;
+                    self.buffered_pending = true;
+                }
+            }
             Change::ChapterList(json) => {
                 let chapters = parse_chapter_list(&json);
                 if chapters != self.chapters {
@@ -449,6 +489,16 @@ impl PlayerModel {
         let due = self
             .last_time_update
             .is_none_or(|last| now.duration_since(last) >= TIME_UPDATE_INTERVAL);
+        let buffered_due = self
+            .last_buffered_update
+            .is_none_or(|last| now.duration_since(last) >= BUFFERED_UPDATE_INTERVAL);
+        if self.buffered_pending && buffered_due {
+            self.buffered_pending = false;
+            self.last_buffered_update = Some(now);
+            events.push(PlayerEvent::BufferedChange {
+                ranges: self.buffered.clone(),
+            });
+        }
         if force_time || (self.time_pending && due) {
             self.time_pending = false;
             self.last_time_update = Some(now);
@@ -639,6 +689,44 @@ pub fn parse_chapter_list(json: &str) -> Vec<Chapter> {
     chapters
 }
 
+/// A `demuxer-cache-state` as mpv reports it (only what's used).
+#[derive(Deserialize)]
+struct MpvCacheState {
+    #[serde(rename = "seekable-ranges", default)]
+    seekable_ranges: Vec<MpvCacheRange>,
+}
+
+#[derive(Deserialize)]
+struct MpvCacheRange {
+    start: f64,
+    end: f64,
+}
+
+/// The buffered ranges in mpv's `demuxer-cache-state` JSON: in order, each
+/// finite and ending after it starts, at most [`MAX_BUFFERED_RANGES`].
+/// Anything else is treated as nothing buffered.
+pub fn parse_cache_state(json: &str) -> Vec<BufferedRange> {
+    if json.len() > MAX_CHAPTER_LIST_BYTES {
+        return Vec::new();
+    }
+    let Ok(state) = serde_json::from_str::<MpvCacheState>(json) else {
+        return Vec::new();
+    };
+    let mut ranges: Vec<BufferedRange> = state
+        .seekable_ranges
+        .into_iter()
+        .filter(|range| range.start.is_finite() && range.end.is_finite())
+        .map(|range| BufferedRange {
+            start: range.start.max(0.0),
+            end: range.end.max(0.0),
+        })
+        .filter(|range| range.end > range.start)
+        .take(MAX_BUFFERED_RANGES)
+        .collect();
+    ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
+    ranges
+}
+
 /// A chapter title fit for display: single-spaced, without control
 /// characters, at most [`MAX_CHAPTER_TITLE_CHARS`] long. `None` if empty.
 fn clean_title(title: &str) -> Option<String> {
@@ -827,6 +915,94 @@ mod tests {
                 .apply(Change::ChapterList("[]".into()), at(3))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn parses_buffered_ranges() {
+        let state = r#"{"cache-end":1540.2,"reader-pts":1500,"cache-duration":40.2,"eof":false,
+            "underrun":false,"idle":false,"total-bytes":52428800,"fw-bytes":31457280,
+            "raw-input-rate":4200000,"seekable-ranges":[{"start":1498.5,"end":1540.2},{"start":-0.1,"end":12}],
+            "bof-cached":true,"eof-cached":false}"#;
+        assert_eq!(
+            parse_cache_state(state),
+            vec![
+                BufferedRange {
+                    start: 0.0,
+                    end: 12.0
+                },
+                BufferedRange {
+                    start: 1498.5,
+                    end: 1540.2
+                },
+            ]
+        );
+        // Empty, missing, malformed, and ranges that go nowhere.
+        assert!(parse_cache_state(r#"{"seekable-ranges":[]}"#).is_empty());
+        assert!(parse_cache_state(r#"{"cache-end":5}"#).is_empty());
+        assert!(parse_cache_state("not json").is_empty());
+        assert!(
+            parse_cache_state(r#"{"seekable-ranges":[{"start":5,"end":5},{"start":9,"end":2}]}"#)
+                .is_empty()
+        );
+        let many: Vec<String> = (0..100)
+            .map(|i| format!(r#"{{"start":{i},"end":{}}}"#, i as f64 + 0.5))
+            .collect();
+        assert_eq!(
+            parse_cache_state(&format!(r#"{{"seekable-ranges":[{}]}}"#, many.join(","))).len(),
+            MAX_BUFFERED_RANGES
+        );
+    }
+
+    #[test]
+    fn buffered_changes_are_throttled_and_cleared_with_the_next_file() {
+        let mut model = PlayerModel::default();
+        let ranges = |events: &[PlayerEvent]| {
+            events.iter().find_map(|e| match e {
+                PlayerEvent::BufferedChange { ranges } => Some(ranges.clone()),
+                _ => None,
+            })
+        };
+        let state = |end: f64| {
+            Change::CacheState(format!(
+                r#"{{"seekable-ranges":[{{"start":0,"end":{end}}}]}}"#
+            ))
+        };
+
+        assert_eq!(
+            ranges(&model.apply(state(5.0), at(0))),
+            Some(vec![BufferedRange {
+                start: 0.0,
+                end: 5.0
+            }])
+        );
+        // Growing every 250 ms: held back for a second, then the latest goes out.
+        assert_eq!(ranges(&model.apply(state(5.3), at(250))), None);
+        assert_eq!(ranges(&model.apply(state(5.6), at(500))), None);
+        assert_eq!(
+            ranges(&model.apply(state(5.9), at(1000))),
+            Some(vec![BufferedRange {
+                start: 0.0,
+                end: 5.9
+            }])
+        );
+        // A held change goes out with whatever comes next once the time is up.
+        assert_eq!(ranges(&model.apply(state(6.2), at(1100))), None);
+        assert_eq!(
+            ranges(&model.apply(Change::Position(Some(3.0)), at(2000))),
+            Some(vec![BufferedRange {
+                start: 0.0,
+                end: 6.2
+            }])
+        );
+        // The same ranges again: nothing to say.
+        assert_eq!(ranges(&model.apply(state(6.2), at(3100))), None);
+        assert_eq!(model.snapshot().buffered.len(), 1);
+
+        // The next file starts with nothing buffered, at once.
+        let events = model.apply(Change::StartFile, at(3200));
+        assert_eq!(ranges(&events), Some(vec![]));
+        assert!(model.snapshot().buffered.is_empty());
+        assert_eq!(ranges(&model.apply(Change::StartFile, at(3300))), None);
     }
 
     #[test]

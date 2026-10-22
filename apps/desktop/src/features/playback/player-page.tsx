@@ -55,6 +55,7 @@ import {
   type SkipSegment,
 } from '@/features/playback/chapter-skip';
 import { AutoSkippedNotice, SkipButton } from '@/features/playback/skip-button';
+import { bufferedAhead, dragStep, type DragState } from '@/features/playback/seek-bar';
 import type { PreviewFrame } from '@/features/playback/seek-preview';
 import { fallbackNotice } from '@/features/playback/stream-fallback';
 import { StreamChoices, StreamsMenu } from '@/features/playback/stream-menu';
@@ -903,6 +904,9 @@ function Controls({
   );
   const seekBy = (delta: number) =>
     run(player.seek(clamp(view.position + delta, 0, view.duration ?? Infinity)));
+  /** Dragging the seek bar (`seek-bar.ts`): one seek, on release. */
+  const dragging = useRef(false);
+  const drag = useRef<DragState>({ position: null });
   /** A frame of the video above the seek bar while hovering (Settings → Playback). */
   const seekPreviews = useSettingsStore((state) => state.settings.playback.seekPreviews);
   const preview = useSeekPreview(seekPreviews, view.duration);
@@ -938,6 +942,8 @@ function Controls({
               position={preview.hover.position}
               duration={view.duration}
               frame={preview.frame}
+              stale={preview.stale}
+              loading={preview.loading}
             />
           )}
           <Range
@@ -948,13 +954,41 @@ function Controls({
             value={Math.min(position, duration || 1)}
             disabled={!view.duration}
             onChange={(seconds) => {
-              onScrub(seconds);
-              run(player.seek(seconds));
+              // A drag moves the thumb and the preview; the seek comes on
+              // release. A click, or a key the bar handles itself (Home,
+              // End, Page Up/Down), seeks at once.
+              if (dragging.current) {
+                const next = dragStep(drag.current, { type: 'move', position: seconds });
+                drag.current = next.drag;
+                onScrub(seconds);
+              } else {
+                run(player.seek(seconds));
+              }
             }}
-            onRelease={() => onScrub(null)}
+            onPointerDown={() => {
+              dragging.current = true;
+            }}
+            onRelease={() => {
+              dragging.current = false;
+              const next = dragStep(drag.current, { type: 'release' });
+              drag.current = next.drag;
+              onScrub(null);
+              if (next.seek !== null) run(player.seek(next.seek));
+            }}
+            onCancel={() => {
+              dragging.current = false;
+              drag.current = dragStep(drag.current, { type: 'cancel' }).drag;
+              onScrub(null);
+            }}
             className="w-full"
           />
-          <ChapterMarks chapters={view.chapters} duration={view.duration} segments={segments} />
+          <SeekBarMarks
+            chapters={view.chapters}
+            buffered={view.buffered}
+            duration={view.duration}
+            position={position}
+            segments={segments}
+          />
         </div>
         <span className="w-16 font-mono text-xs text-ink-300 tabular-nums">
           {view.duration === null ? 'Live' : `-${formatDuration(Math.max(duration - position, 0))}`}
@@ -1049,31 +1083,51 @@ function Controls({
 /**
  * Above the seek bar while the pointer is over it: the time under the
  * pointer, with a frame from there once one has been made
- * (`use-seek-preview.ts`). Kept inside the bar's ends.
+ * (`use-seek-preview.ts`). While it is, a nearby frame stands in, dimmed,
+ * or an empty card shimmers. Kept inside the bar's ends.
  */
 function SeekPreviewCard({
   position,
   duration,
   frame,
+  stale,
+  loading,
 }: {
   position: number;
   duration: number;
   frame: PreviewFrame | undefined;
+  stale: boolean;
+  loading: boolean;
 }) {
   const percent = clamp((position / duration) * 100, 0, 100);
+  const shimmer = loading && (
+    <span
+      aria-hidden
+      className="absolute inset-0 animate-[kiro-shimmer_1.2s_ease-in-out_infinite] bg-linear-to-r from-transparent via-white/15 to-transparent"
+    />
+  );
   return (
     <div
       aria-hidden
       className="pointer-events-none absolute bottom-full z-20 mb-3 flex -translate-x-1/2 flex-col items-center gap-1.5"
       style={{ left: `clamp(6rem, ${percent}%, calc(100% - 6rem))` }}
     >
-      {frame && (
-        <img
-          src={frame.image}
-          alt=""
-          draggable={false}
-          className="w-48 rounded-lg bg-black shadow-[0_12px_40px_-12px_rgb(0_0_0/0.9)] ring-1 ring-white/15"
-        />
+      {frame ? (
+        <span className="relative block w-48 overflow-hidden rounded-lg bg-black shadow-[0_12px_40px_-12px_rgb(0_0_0/0.9)] ring-1 ring-white/15">
+          <img
+            src={frame.image}
+            alt=""
+            draggable={false}
+            className={cx('block w-full transition-opacity duration-150', stale && 'opacity-50')}
+          />
+          {shimmer}
+        </span>
+      ) : (
+        loading && (
+          <span className="relative block aspect-video w-48 overflow-hidden rounded-lg bg-black/70 shadow-[0_12px_40px_-12px_rgb(0_0_0/0.9)] ring-1 ring-white/15">
+            {shimmer}
+          </span>
+        )
       )}
       <span className="rounded-md bg-black/75 px-2 py-0.5 font-mono text-xs text-ink-50 tabular-nums backdrop-blur">
         {formatDuration(position)}
@@ -1129,7 +1183,9 @@ function Range({
   value,
   disabled,
   onChange,
+  onPointerDown,
   onRelease,
+  onCancel,
   className,
 }: {
   label: string;
@@ -1141,7 +1197,9 @@ function Range({
   value: number;
   disabled?: boolean;
   onChange: (value: number) => void;
+  onPointerDown?: () => void;
   onRelease?: () => void;
+  onCancel?: () => void;
   className?: string;
 }) {
   return (
@@ -1156,7 +1214,9 @@ function Range({
       value={value}
       disabled={disabled}
       onChange={(event) => onChange(Number(event.target.value))}
+      onPointerDown={onPointerDown}
       onPointerUp={onRelease}
+      onPointerCancel={onCancel}
       style={{ '--fill': `${max > 0 ? (value / max) * 100 : 0}%` } as CSSProperties}
       className={cx('kiro-range', className)}
     />
@@ -1164,27 +1224,45 @@ function Range({
 }
 
 /**
- * Chapters on the seek bar: a gap where each one starts, and the parts that
- * can be skipped (intro, credits) tinted, including times looked up online
- * for a file without chapters. A plain bar is how to tell why Skip intro
+ * Over the seek bar: what the player has buffered (a lighter band, where
+ * seeking is instant), the parts that can be skipped (intro, credits)
+ * tinted, including times looked up online for a file without chapters, and
+ * a gap where each chapter starts. A plain bar is how to tell why Skip intro
  * never appears.
  */
-function ChapterMarks({
+function SeekBarMarks({
   chapters,
+  buffered,
   duration,
+  position,
   segments,
 }: {
   chapters: NativePlayerView['chapters'];
+  buffered: NativePlayerView['buffered'];
   duration: number | null;
+  position: number;
   segments: SkipSegment[];
 }) {
-  if (!duration || (chapters.length < 2 && segments.length === 0)) return null;
+  if (!duration) return null;
   const at = (seconds: number) => `${clamp((seconds / duration) * 100, 0, 100)}%`;
+  // Up to the position the track is filled anyway: only the part ahead.
+  const ahead = bufferedAhead(buffered, position, duration);
+  if (ahead.length === 0 && segments.length === 0 && chapters.length < 2) return null;
   return (
     <div
       aria-hidden
       className="pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2"
     >
+      {ahead.map((range) => (
+        <span
+          key={range.start}
+          className="absolute inset-y-0 rounded-full bg-white/20"
+          style={{
+            left: at(range.start),
+            width: `calc(${at(range.end)} - ${at(range.start)})`,
+          }}
+        />
+      ))}
       {segments.map((segment) => (
         <span
           key={segment.start}
