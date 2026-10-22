@@ -13,6 +13,8 @@ export type KeyAction =
   | { kind: 'move'; direction: Direction }
   | { kind: 'activate' }
   | { kind: 'back' }
+  /** Open the focused item's menu of actions (a card's "Mark as watched", …). */
+  | { kind: 'menu' }
   | { kind: 'help' }
   | { kind: 'media'; command: MediaCommand };
 
@@ -27,6 +29,7 @@ export interface KeyInput {
   altKey?: boolean;
   ctrlKey?: boolean;
   metaKey?: boolean;
+  shiftKey?: boolean;
 }
 
 const DIRECTIONS: Record<string, Direction> = {
@@ -81,6 +84,12 @@ export function keyAction(input: KeyInput): KeyAction | null {
       return { kind: 'back' };
     case '?':
       return { kind: 'help' };
+    // The keyboard's Menu key (an Android TV remote's Menu button arrives as
+    // it too), and Shift F10 on keyboards without one.
+    case 'ContextMenu':
+      return { kind: 'menu' };
+    case 'F10':
+      if (input.shiftKey) return { kind: 'menu' };
   }
   return (input.keyCode !== undefined && TV_KEY_CODES[input.keyCode]) || null;
 }

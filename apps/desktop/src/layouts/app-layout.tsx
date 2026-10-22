@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { NavigationType, Outlet, useLocation, useNavigationType } from 'react-router';
 
 import { Header } from '@/components/header';
+import { Toaster } from '@/components/toaster';
 import { Sidebar } from '@/components/sidebar';
 import { FirstRunGate } from '@/features/onboarding/first-run';
 import { useSetupStore } from '@/features/onboarding/setup-store';
@@ -82,6 +83,7 @@ function Shell({ covered }: { covered: boolean }) {
         <Header solid={scrolled} />
         <Outlet />
       </main>
+      <Toaster />
     </div>
   );
 }

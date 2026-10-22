@@ -17,6 +17,7 @@ function everywhere(): Shortcut[] {
     { keys: ['↑', '↓', '←', '→'], action: 'Move between items' },
     { keys: ['Enter', 'Space'], action: 'Open or press' },
     { keys: ['Esc', '⌫'], action: 'Go back' },
+    { keys: ['☰', '⇧F10'], action: 'Menu: mark watched, remove from Continue watching' },
     { keys: [usesCommandKey() ? '⌘K' : 'Ctrl K'], action: 'Search' },
     { keys: ['?'], action: 'Show these shortcuts' },
   ];

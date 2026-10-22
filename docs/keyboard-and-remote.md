@@ -11,6 +11,7 @@ Kiro can be used from a sofa with arrows, Enter and Back, as on a TV. The same c
 | ↑ ↓ ← →           | Move focus to the nearest item that way                                               |
 | Enter, Space      | Open or press what is focused                                                         |
 | Escape, Backspace | Go back (history back, or Discover from a first page). Never while typing in a field. |
+| Menu, Shift F10   | The focused card's menu: mark watched or unwatched, remove from Continue watching     |
 | ⌘K / Ctrl K       | Search                                                                                |
 | ?                 | Keyboard shortcuts                                                                    |
 | Tab, Shift Tab    | Unchanged: document order                                                             |
@@ -55,6 +56,8 @@ The rules for choosing the next item follow Android's FocusFinder: only items wh
 - **Customise.** The row editor on Discover, Movies and TV Shows is a layer: arrows move between its buttons and switches, Escape or Back closes it. Moving or hiding a row keeps focus on that control (or the next row's); see [discover.md](discover.md#customising).
 - **Who’s watching?** The profile picker and its PIN pad are layers: arrows move between the tiles (or the on-screen digits, which can also be typed), Enter chooses, and Back returns from the PIN pad to the tiles or closes a picker opened to switch. See [profiles.md](profiles.md#keyboard-and-remote).
 - **First-run setup.** A layer over the app: focus starts on the link field, and Escape or Back skips it (not while typing). See [first-run.md](first-run.md#keyboard-and-remote).
+- **Card menus.** The Menu key (or Shift F10) opens the focused card's menu, as a right click would: the navigation sends the card a `contextmenu` event. The menus are layers; their "⋯" buttons are `data-nav-skip`, so a row's Left and Right still go card to card. See [library.md](library.md#menus-with-the-mouse-keyboard-and-remote).
+- **Notices.** Removing a title from Continue watching with the keys focuses the notice's Undo; Back closes the notice (`data-nav-own="back"`) and focus goes to the card beside the removed one.
 - **Over the video.** Skip intro/credits and Up next sit above the control bar and are reached with Up; while the controls are hidden, the first arrow lands on Skip. The resume prompt keeps the arrows on its two buttons.
 
 Focus shows as a violet ring (`focus-ring`) on buttons, chips and tabs, and as a lift with a glow (`focus-lift`) on posters and cards, both in `packages/ui/src/styles.css`. They appear for keys and not for clicks: `focus-visible:` matches `:focus-visible`, or `[data-nav-focus]`, which the navigation sets on elements it focuses because WebKit doesn't treat script focus as visible after a click.
@@ -71,6 +74,7 @@ Plain focusable elements need nothing. Data attributes steer the rest:
 | `data-nav-layer`                      | A menu or dialog: arrows stay inside, Back is left to it                                              |
 | `data-nav-keys="back space sideways"` | The page handles these keys itself (the player). `sideways` keeps ← → unless a control has key focus. |
 | `data-nav-own="sideways"`             | A widget that moves with Left and Right itself (a roving-focus radio group); Up and Down move on      |
+| `data-nav-own="back"`                 | A widget that handles Back itself while focus is in it (the Undo notice)                              |
 | `data-nav-skip`                       | Arrows pass this element (or everything inside it) by; Tab still reaches it                           |
 | `data-nav-fallback`                   | Reached only when nothing else lies that way (the header)                                             |
 | `data-nav-side`                       | A side column (the sidebar), entered with Left and Right only                                         |
@@ -88,6 +92,7 @@ Pages that handle keys themselves should skip events that are already `defaultPr
 | Fast-forward / rewind | `MediaFastForward` / `MediaRewind` (417 / 412 on HbbTV-style TVs)                                                                                                                                                                                                                       |
 | Next / previous       | `MediaTrackNext` / `MediaTrackPrevious`                                                                                                                                                                                                                                                 |
 | Stop                  | `MediaStop` (413)                                                                                                                                                                                                                                                                       |
+| Menu / Options        | `ContextMenu` where the platform maps it (Android's `KEYCODE_MENU`; untested on a TV). Opens the focused card's menu. Keyboards: the Menu key, or Shift F10                                                                                                                             |
 | Colour buttons        | 403–406 (red, green, yellow, blue): not used yet                                                                                                                                                                                                                                        |
 
 `keys.ts` maps all of these, including the key codes TV browsers send without a `key` value.

@@ -38,10 +38,12 @@ once and rewritten whole on the rare change. Library data is different:
 - A database written by a newer Kiro (higher `user_version`) is refused, not
   downgraded. A file that isn't a usable database is renamed to
   `kiro.sqlite3.corrupt` and replaced, so it never blocks startup.
-- `library::Library` owns the tables: `watchlist` (one row per title) and
-  `history` (one row per played video, upserted with the latest position).
-  Rows keep a snapshot of the title's name and poster so the Library renders
-  without asking an addon.
+- `library::Library` owns the tables: `watchlist` (one row per title),
+  `history` (one row per played video, upserted with the latest position, or
+  marked watched by hand) and `continue_dismissed` (titles taken off Continue
+  watching until played again; migration `0004_continue_dismissed.sql`, see
+  [library.md](../library.md)). Rows keep a snapshot of the title's name and
+  poster so the Library renders without asking an addon.
 - Every row belongs to a profile (`profile_id`, leading both primary keys and
   indexes; migration `0002_profiles.sql`). `Library::profile` gives a
   `ProfileLibrary` whose queries see one profile's rows only, and commands use

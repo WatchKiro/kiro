@@ -12,7 +12,10 @@
  *   OpenSubtitles v3; OpenSubtitles starts out missing here (the fake
  *   subtitles stand in for it), so "Restore default addons" has something
  *   to put back;
- * - the library is kept in memory, seeded with a few titles;
+ * - the library is kept in memory, seeded with a few titles (Continue
+ *   watching, a series between episodes, finished films and a series that's
+ *   over), with marking watched and unwatched and taking titles off Continue
+ *   watching as the core does them;
  * - profiles: one, "Me", to start with, as in a fresh install. Set
  *   `localStorage['kiro.preview.profiles']` to `family` for three ("Me" with
  *   the seeded library, "Sam" with a little of their own, and "Kids", locked
@@ -516,6 +519,9 @@ function daysAgo(days: number, hour: number, minute = 0) {
   ).getTime();
 }
 
+/** When titles (`type:id`) were taken off Continue watching (`Library::dismiss_from_continue_watching`). */
+let dismissed = new Map<string, number>();
+
 /** Seeded so History shows each day group, series with several episodes and every action. */
 let history: HistoryEntry[] = [
   // Today: an episode in progress, after the two before it.
@@ -638,11 +644,23 @@ function progressEntry(
 const sameTitle = (type: string, id: string) => (entry: { title: LibraryTitle }) =>
   entry.title.type === type && entry.title.id === id;
 
+function titleState(type: string, id: string) {
+  return {
+    inWatchlist: watchlist.some(sameTitle(type, id)),
+    progress: history.filter(sameTitle(type, id)).sort(byLatest),
+  };
+}
+
+/** A title's progress, latest first (ties by video id, as the core). */
+function byLatest(a: HistoryEntry, b: HistoryEntry) {
+  return b.updatedAt - a.updatedAt || a.video.id.localeCompare(b.video.id);
+}
+
 /** The latest video of each title, newest first (`Library::latest_per_title`). */
 function latestPerTitle(filter: (entry: HistoryEntry) => boolean, limit = 100) {
   const seen = new Set<string>();
   return [...history]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .sort(byLatest)
     .filter((entry) => {
       const key = `${entry.title.type}:${entry.title.id}`;
       if (seen.has(key)) return false;
@@ -846,6 +864,7 @@ interface PreviewProfile {
   lastUsed: number;
   watchlist: WatchlistItem[];
   history: HistoryEntry[];
+  dismissed: Map<string, number>;
   settings: Settings;
 }
 
@@ -872,6 +891,7 @@ const previewProfiles: PreviewProfile[] = [
     lastUsed: 0,
     watchlist,
     history,
+    dismissed,
     settings,
   },
 ];
@@ -898,6 +918,7 @@ function addPreviewProfile(
     pin,
     lastUsed: 0,
     ...seed,
+    dismissed: new Map(),
     settings: storedSettings(id),
   });
   return id;
@@ -977,7 +998,7 @@ function checkPin(pin: unknown): string | null {
 /** Points the library and settings handlers at another profile's. */
 function activate(entry: PreviewProfile) {
   activeProfile = entry.profile.id;
-  ({ watchlist, history, settings } = entry);
+  ({ watchlist, history, dismissed, settings } = entry);
 }
 
 const profileHandlers: Record<string, (args: Args) => unknown> = {
@@ -1141,25 +1162,103 @@ const handlers: Record<string, (args: Args) => unknown> = {
     })),
   library_continue_watching: ({ limit }) =>
     latestPerTitle(
-      // Mirrors `Library::continue_watching`: series between episodes stay.
+      // Mirrors `Library::continue_watching`: series between episodes stay,
+      // titles taken off since they were last played don't.
       (entry) =>
-        (!entry.completed && entry.position >= MIN_RESUME_SECONDS) ||
-        (entry.title.type === 'series' && entry.completed),
+        ((!entry.completed && entry.position >= MIN_RESUME_SECONDS) ||
+          (entry.title.type === 'series' && entry.completed)) &&
+        !((dismissed.get(`${entry.title.type}:${entry.title.id}`) ?? -1) >= entry.updatedAt),
       limit as number | undefined,
     ),
-  library_title_state: ({ type, id }) => ({
-    inWatchlist: watchlist.some(sameTitle(type as string, id as string)),
-    progress: history
-      .filter(sameTitle(type as string, id as string))
-      .sort((a, b) => b.updatedAt - a.updatedAt),
-  }),
+  library_title_state: ({ type, id }) => titleState(type as string, id as string),
   library_history_remove: ({ type, id }) => {
     const keep = history.filter((entry) => !sameTitle(type as string, id as string)(entry));
     history.splice(0, history.length, ...keep);
+    dismissed.delete(`${String(type)}:${String(id)}`);
   },
   library_history_clear: () => {
     history.length = 0;
+    dismissed.clear();
   },
+  library_continue_dismiss: ({ type, id }) => {
+    const progress = history.filter(sameTitle(type as string, id as string));
+    if (progress.length === 0) return;
+    const latest = Math.max(...progress.map((entry) => entry.updatedAt));
+    dismissed.set(`${String(type)}:${String(id)}`, Math.max(Date.now(), latest));
+  },
+  library_continue_restore: ({ type, id }) => {
+    dismissed.delete(`${String(type)}:${String(id)}`);
+  },
+  library_mark_watched: ({ title: marked, videos }) => {
+    const { type, id } = marked as LibraryTitle;
+    const list = videos as LibraryVideo[];
+    if (list.length === 0 || list.length > 5_000) {
+      throw commandError('INVALID_ARGUMENT', 'Mark between 1 and 5000 videos');
+    }
+    // As `Library::mark_watched`: dated as watched now, in order, unless
+    // every one comes before the series' latest episode.
+    const latest = history.filter(sameTitle(type, id)).sort(byLatest)[0];
+    const number = (video: LibraryVideo): [number, number] | null =>
+      video.season === null || video.episode === null ? null : [video.season, video.episode];
+    const latestNumber = latest && number(latest.video);
+    const behind =
+      latestNumber &&
+      list.every((video) => {
+        const own = number(video);
+        return (
+          video.id !== latest.video.id &&
+          own !== null &&
+          (own[0] < latestNumber[0] || (own[0] === latestNumber[0] && own[1] < latestNumber[1]))
+        );
+      });
+    const last = latest
+      ? behind
+        ? latest.updatedAt - 1
+        : Math.max(Date.now(), latest.updatedAt + 1)
+      : Date.now();
+    list.forEach((video, index) => {
+      const at = last - (list.length - 1 - index);
+      const existing = history.find(
+        (entry) => sameTitle(type, id)(entry) && entry.video.id === video.id,
+      );
+      if (existing) {
+        Object.assign(existing, {
+          title: marked,
+          video: {
+            ...existing.video,
+            season: video.season ?? existing.video.season,
+            episode: video.episode ?? existing.video.episode,
+            name: video.name ?? existing.video.name,
+          },
+          position: existing.duration,
+          completed: true,
+          updatedAt: at,
+        });
+      } else {
+        history.push({
+          title: marked as LibraryTitle,
+          video,
+          position: 0,
+          duration: 0,
+          completed: true,
+          updatedAt: at,
+        });
+      }
+    });
+    return titleState(type, id);
+  },
+  library_mark_unwatched: ({ type, id, videos }) => {
+    const ids = videos as string[];
+    const keep = history.filter(
+      (entry) => !(sameTitle(type as string, id as string)(entry) && ids.includes(entry.video.id)),
+    );
+    history.splice(0, history.length, ...keep);
+    return titleState(type as string, id as string);
+  },
+  library_watched_titles: () =>
+    history
+      .filter((entry) => entry.video.id === entry.title.id && entry.completed)
+      .map(({ title: { type, id } }) => ({ type, id })),
 };
 
 export function installPreviewBackend() {

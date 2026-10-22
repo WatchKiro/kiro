@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-mark-watched"
+description = "Enables the library_mark_watched command without any pre-configured scope."
+commands.allow = ["library_mark_watched"]
+
+[[permission]]
+identifier = "deny-library-mark-watched"
+description = "Denies the library_mark_watched command without any pre-configured scope."
+commands.deny = ["library_mark_watched"]

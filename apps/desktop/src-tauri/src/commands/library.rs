@@ -9,7 +9,7 @@ use crate::core::error::Result;
 use crate::core::state::AppState;
 use crate::library::{
     COMPLETED_FRACTION, HistoryEntry, HistoryTitle, MediaId, MediaType, PlaybackProgress,
-    TitleLibraryState, TitleSnapshot, WatchlistItem,
+    TitleLibraryState, TitleRef, TitleSnapshot, VideoIds, WatchedVideos, WatchlistItem,
 };
 
 #[tauri::command]
@@ -61,7 +61,8 @@ pub async fn library_history(
     state.library()?.history(limit)
 }
 
-/// Titles with unfinished progress, newest first.
+/// Titles to carry on with (unfinished, or a series between episodes),
+/// newest first, without those taken off the list.
 #[tauri::command]
 pub async fn library_continue_watching(
     limit: Option<u32>,
@@ -93,4 +94,56 @@ pub async fn library_history_remove(
 #[tauri::command]
 pub async fn library_history_clear(state: State<'_, AppState>) -> Result<()> {
     state.library()?.clear_history()
+}
+
+/// Takes a title off Continue watching until it is played again. Its history
+/// and progress are kept.
+#[tauri::command]
+pub async fn library_continue_dismiss(
+    r#type: MediaType,
+    id: MediaId,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state
+        .library()?
+        .dismiss_from_continue_watching(&r#type, &id)
+}
+
+/// Puts a title taken off Continue watching back (Undo).
+#[tauri::command]
+pub async fn library_continue_restore(
+    r#type: MediaType,
+    id: MediaId,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state.library()?.restore_to_continue_watching(&r#type, &id)
+}
+
+/// Marks a film, or episodes of a series in the order given, as watched.
+/// Returns the title's state afterwards.
+#[tauri::command]
+pub async fn library_mark_watched(
+    title: TitleSnapshot,
+    videos: WatchedVideos,
+    state: State<'_, AppState>,
+) -> Result<TitleLibraryState> {
+    state.library()?.mark_watched(&title, &videos)
+}
+
+/// Marks videos of a title as unwatched, forgetting their progress. Returns
+/// the title's state afterwards.
+#[tauri::command]
+pub async fn library_mark_unwatched(
+    r#type: MediaType,
+    id: MediaId,
+    videos: VideoIds,
+    state: State<'_, AppState>,
+) -> Result<TitleLibraryState> {
+    state.library()?.mark_unwatched(&r#type, &id, &videos)
+}
+
+/// Finished films, for the watched tick on posters.
+#[tauri::command]
+pub async fn library_watched_titles(state: State<'_, AppState>) -> Result<Vec<TitleRef>> {
+    state.library()?.watched_titles()
 }

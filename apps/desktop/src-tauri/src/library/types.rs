@@ -19,6 +19,8 @@ const MAX_NAME_CHARS: usize = 300;
 const MAX_URL_LENGTH: usize = 2048;
 /// A week: longer "durations" are not real videos.
 pub const MAX_DURATION_SECONDS: f64 = 7.0 * 24.0 * 3600.0;
+/// Most videos one mark can cover: a whole long-running series.
+pub const MAX_MARKED_VIDEOS: usize = 5_000;
 
 /// An addon content type such as `movie` or `series`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +273,71 @@ pub struct TitleLibraryState {
     pub progress: Vec<HistoryEntry>,
 }
 
+/// Videos to mark as watched, in the order they were watched (a season's
+/// episodes in order): at least one, at most [`MAX_MARKED_VIDEOS`], each once.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(try_from = "Vec<VideoSnapshot>")]
+pub struct WatchedVideos(Vec<VideoSnapshot>);
+
+impl WatchedVideos {
+    pub fn as_slice(&self) -> &[VideoSnapshot] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<VideoSnapshot>> for WatchedVideos {
+    type Error = Error;
+
+    fn try_from(videos: Vec<VideoSnapshot>) -> Result<Self, Self::Error> {
+        check_marked(videos.iter().map(|video| &video.id))?;
+        Ok(Self(videos))
+    }
+}
+
+/// Videos of one title to mark as unwatched: at least one, at most
+/// [`MAX_MARKED_VIDEOS`], each once.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(try_from = "Vec<MediaId>")]
+pub struct VideoIds(Vec<MediaId>);
+
+impl VideoIds {
+    pub fn as_slice(&self) -> &[MediaId] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<MediaId>> for VideoIds {
+    type Error = Error;
+
+    fn try_from(ids: Vec<MediaId>) -> Result<Self, Self::Error> {
+        check_marked(ids.iter())?;
+        Ok(Self(ids))
+    }
+}
+
+fn check_marked<'a>(ids: impl ExactSizeIterator<Item = &'a MediaId>) -> Result<(), Error> {
+    if ids.len() == 0 || ids.len() > MAX_MARKED_VIDEOS {
+        return Err(Error::invalid_argument(format!(
+            "Mark between 1 and {MAX_MARKED_VIDEOS} videos"
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        if !seen.insert(id.as_str()) {
+            return Err(Error::invalid_argument("A video is listed twice"));
+        }
+    }
+    Ok(())
+}
+
+/// A title, without its display data.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleRef {
+    pub r#type: MediaType,
+    pub id: MediaId,
+}
+
 /// What an import ([`super::Library::import_watchlist`],
 /// [`super::Library::import_history`]) did with each entry.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -357,5 +424,33 @@ mod tests {
             "duration": 100,
         }));
         assert!(bad_title.is_err());
+    }
+
+    #[test]
+    fn validates_marked_videos_while_deserializing() {
+        let videos = |ids: Vec<String>| {
+            let list: Vec<_> = ids.iter().map(|id| json!({ "id": id })).collect();
+            serde_json::from_value::<WatchedVideos>(json!(list))
+        };
+        let ids = |ids: Vec<String>| serde_json::from_value::<VideoIds>(json!(ids));
+        let numbered = |count: usize| (0..count).map(|n| format!("tt1:1:{n}")).collect();
+
+        assert_eq!(videos(numbered(3)).unwrap().as_slice().len(), 3);
+        assert_eq!(
+            ids(numbered(MAX_MARKED_VIDEOS)).unwrap().as_slice().len(),
+            MAX_MARKED_VIDEOS
+        );
+        for invalid in [
+            vec![],
+            numbered(MAX_MARKED_VIDEOS + 1),
+            vec!["tt1:1:1".into(), "tt1:1:1".into()],
+            vec![String::new()],
+        ] {
+            assert!(videos(invalid.clone()).is_err(), "{}", invalid.len());
+            assert!(ids(invalid).is_err());
+        }
+        let bad_name =
+            serde_json::from_value::<WatchedVideos>(json!([{ "id": "tt1", "name": " " }]));
+        assert!(bad_name.is_err());
     }
 }

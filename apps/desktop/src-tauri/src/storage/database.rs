@@ -26,6 +26,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0001_library.sql"),
     include_str!("migrations/0002_profiles.sql"),
     include_str!("migrations/0003_first_run.sql"),
+    include_str!("migrations/0004_continue_dismissed.sql"),
 ];
 
 #[derive(Debug)]
@@ -144,7 +145,8 @@ pub(crate) mod tests {
 
     /// The tables of the latest schema (`sqlite_sequence` is SQLite's, for
     /// `profiles`' AUTOINCREMENT).
-    const LATEST_TABLES: [&str; 5] = [
+    const LATEST_TABLES: [&str; 6] = [
+        "continue_dismissed",
         "history",
         "profile_options",
         "profiles",
@@ -204,7 +206,7 @@ pub(crate) mod tests {
         let database = Database::new(&dir);
         assert_eq!(user_version(&database), schema_version(MIGRATIONS.len()));
         let mut expected = LATEST_TABLES.to_vec();
-        expected.insert(1, "keep");
+        expected.insert(2, "keep");
         assert_eq!(tables(&database), expected);
         drop(database);
         fs::remove_dir_all(dir).unwrap();
@@ -434,6 +436,44 @@ pub(crate) mod tests {
         assert!(
             dump(&migrated, "PRAGMA foreign_key_check").is_empty(),
             "no orphaned rows"
+        );
+        drop(migrated);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn continue_dismissed_migration_keeps_history_and_belongs_to_a_profile() {
+        let dir = temp_dir("database");
+        version_1_database(&dir);
+        // Migrated to version 2 (profiles) first, as Kiro 0.2 left it.
+        {
+            let mut connection = Connection::open(dir.join(FILE_NAME)).unwrap();
+            let transaction = connection.transaction().unwrap();
+            transaction.execute_batch(MIGRATIONS[1]).unwrap();
+            transaction.pragma_update(None, "user_version", 2).unwrap();
+            transaction.commit().unwrap();
+        }
+        let history = "SELECT profile_id, type, id, video_id, position, completed, updated_at
+                       FROM history ORDER BY updated_at";
+        let migrated = Database::new(&dir);
+        assert_eq!(user_version(&migrated), schema_version(MIGRATIONS.len()));
+        assert_eq!(dump(&migrated, history).len(), 3, "history is untouched");
+        assert!(dump(&migrated, "SELECT * FROM continue_dismissed").is_empty());
+
+        // A second profile's dismissals go with it.
+        migrated
+            .with(|c| {
+                c.execute_batch(
+                    "INSERT INTO profiles (id, name, avatar, created_at) VALUES (2, 'Sam', 'teal', 0);
+                     INSERT INTO continue_dismissed VALUES (1, 'movie', 'tt1375666', 5), (2, 'movie', 'tt1375666', 5);
+                     DELETE FROM profiles WHERE id = 2;",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            dump(&migrated, "SELECT profile_id, id FROM continue_dismissed"),
+            [["1", "tt1375666"]]
         );
         drop(migrated);
         fs::remove_dir_all(dir).unwrap();

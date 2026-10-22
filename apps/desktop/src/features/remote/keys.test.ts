@@ -22,6 +22,13 @@ describe('keyAction', () => {
     assert.deepEqual(keyAction({ key: '?' }), { kind: 'help' });
   });
 
+  it('reads the Menu key and Shift F10 as menu', () => {
+    assert.deepEqual(keyAction({ key: 'ContextMenu' }), { kind: 'menu' });
+    assert.deepEqual(keyAction({ key: 'F10', shiftKey: true }), { kind: 'menu' });
+    assert.equal(keyAction({ key: 'F10' }), null);
+    assert.equal(keyAction({ key: 'F10', shiftKey: true, ctrlKey: true }), null);
+  });
+
   it('leaves shortcuts with modifiers alone', () => {
     assert.equal(keyAction({ key: 'ArrowLeft', metaKey: true }), null);
     assert.equal(keyAction({ key: 'Backspace', ctrlKey: true }), null);

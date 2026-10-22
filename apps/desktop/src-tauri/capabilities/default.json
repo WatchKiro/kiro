@@ -24,6 +24,11 @@
     "allow-library-title-state",
     "allow-library-history-remove",
     "allow-library-history-clear",
+    "allow-library-continue-dismiss",
+    "allow-library-continue-restore",
+    "allow-library-mark-watched",
+    "allow-library-mark-unwatched",
+    "allow-library-watched-titles",
     "allow-settings-get",
     "allow-settings-set"
   ]

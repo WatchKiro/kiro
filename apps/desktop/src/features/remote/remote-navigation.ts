@@ -8,7 +8,8 @@ import { FocusMemory, chooseMove, type Direction, type NavItem } from '@/feature
 /**
  * Keyboard and remote-control navigation for the whole app: arrows move focus
  * by on-screen position, Enter and Space activate, Escape and Backspace go
- * back, `?` shows the shortcuts. Tab order, the mouse and screen readers work
+ * back, the Menu key (or Shift F10) opens the focused card's menu as a right
+ * click would (a `contextmenu` event), `?` shows the shortcuts. Tab order, the mouse and screen readers work
  * as before; this only adds keys.
  *
  * Pages steer it with data attributes:
@@ -25,6 +26,8 @@ import { FocusMemory, chooseMove, type Direction, type NavItem } from '@/feature
  *   focused with the keys.
  * - `data-nav-own="sideways"` around a widget that moves with Left and Right
  *   itself (a radio group with roving focus); Up and Down still move on.
+ *   `data-nav-own="back"`: a widget that handles Back itself while focused
+ *   (a notice closing).
  * - `data-nav-skip` on an element (or around elements) arrows should pass by.
  * - `data-nav-fallback` around items reached only when nothing else lies that
  *   way, such as the floating header over the page's top.
@@ -215,6 +218,23 @@ function activate(event: KeyboardEvent, active: Element | null): boolean {
   return true;
 }
 
+/**
+ * Asks the focused item for its menu with a `contextmenu` event, placed at
+ * its top right corner. Whether something opened one (cancelled the event).
+ */
+function openMenu(active: HTMLElement | null): boolean {
+  if (!active || active === document.body || isTextField(active)) return false;
+  const rect = active.getBoundingClientRect();
+  return !active.dispatchEvent(
+    new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.right,
+      clientY: rect.top,
+    }),
+  );
+}
+
 function goBack(router: Router) {
   const { location } = router.state;
   // `default` is the first entry of this session: nothing to go back to.
@@ -257,10 +277,14 @@ function onKeyDown(router: Router, event: KeyboardEvent) {
       break;
     case 'back':
       // Typing (Backspace deletes, Escape clears the search), an open menu or
-      // dialog, or a page with its own Back.
+      // dialog, a widget or page with its own Back.
       if (isTextField(field) || topLayer() || keys.includes('back')) return;
+      if (field?.closest('[data-nav-own~="back"]')) return;
       goBack(router);
       handled = true;
+      break;
+    case 'menu':
+      handled = openMenu(field);
       break;
     case 'help':
       if (isTextField(field)) return;

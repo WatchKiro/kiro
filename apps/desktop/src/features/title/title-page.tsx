@@ -1,18 +1,20 @@
 import type { MetaDetail, Video } from '@kiro/addon-sdk';
 import { Button, buttonVariants } from '@kiro/ui';
 import { cx, formatDuration } from '@kiro/utils';
-import { Clapperboard, ListVideo, Loader2, Play, RotateCcw } from 'lucide-react';
+import { Clapperboard, Ellipsis, ListVideo, Loader2, Play, RotateCcw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 
+import { MenuButton } from '@/components/action-menu';
 import { PageMessage } from '@/components/page';
 import { useAddonsStore, type InstalledAddon } from '@/features/addons/addons-store';
 import { displayableImage } from '@/features/addons/catalog';
 import { HeroBackdrop, MetaLine, TitleLogo } from '@/features/discovery/hero';
 import { titleKey } from '@/features/library/library-data';
 import { useLibraryStore } from '@/features/library/library-store';
+import { showActions } from '@/features/library/watch-actions';
+import { WatchedButton } from '@/features/library/watched-button';
 import { WatchlistButton } from '@/features/library/watchlist-button';
-import type { PlaybackMedia } from '@/features/playback/playback-request';
 import { EpisodeList } from '@/features/title/episode-list';
 import { StreamList } from '@/features/title/stream-list';
 import { rankedPlaybackRequest } from '@/features/title/stream-ranking';
@@ -22,6 +24,7 @@ import {
   groupSeasons,
   metaAddons,
   metaKey,
+  movieMedia,
   nextEpisode,
   releaseYear,
   type Season,
@@ -219,6 +222,25 @@ function Title({ addons, type, id }: { addons: InstalledAddon[]; type: string; i
               </>
             )
           }
+          watched={
+            !episodic ? (
+              <WatchedButton title={libraryTitle} progress={progress} ready={Boolean(library)} />
+            ) : (
+              seasons.length > 0 && (
+                <MenuButton
+                  label="Mark the show watched or unwatched"
+                  actions={showActions(libraryTitle, seasons, progress)}
+                  className={buttonVariants({
+                    variant: 'secondary',
+                    size: 'lg',
+                    className: 'w-12 px-0!',
+                  })}
+                >
+                  <Ellipsis aria-hidden className="size-5" />
+                </MenuButton>
+              )
+            )
+          }
           note={
             episodic
               ? next?.resume
@@ -289,6 +311,7 @@ function Title({ addons, type, id }: { addons: InstalledAddon[]; type: string; i
               />
             ) : (
               <Episodes
+                title={libraryTitle}
                 seasons={seasons}
                 selected={selected ?? next?.video}
                 progress={progress}
@@ -411,11 +434,13 @@ function SeriesTabs({
 }
 
 function Episodes({
+  title,
   seasons,
   selected,
   progress,
   onSelect,
 }: {
+  title: LibraryTitle;
   seasons: Season[];
   selected: Video | undefined;
   progress: HistoryEntry[];
@@ -430,6 +455,7 @@ function Episodes({
   }
   return (
     <EpisodeList
+      title={title}
       seasons={seasons}
       season={season}
       onSeasonChange={setPicked}
@@ -440,19 +466,18 @@ function Episodes({
   );
 }
 
-function movieMedia(title: LibraryTitle): PlaybackMedia {
-  return { title, video: { id: title.id, season: null, episode: null, name: null } };
-}
-
 function Hero({
   meta,
   libraryTitle,
   action,
+  watched,
   note,
 }: {
   meta: MetaDetail;
   libraryTitle: LibraryTitle;
   action: ReactNode;
+  /** Marking it watched or unwatched. */
+  watched: ReactNode;
   note: string | undefined;
 }) {
   const year = releaseYear(meta.releaseInfo) ?? releaseYear(meta.released);
@@ -478,6 +503,7 @@ function Hero({
         <div data-nav-group className="mt-6 flex flex-wrap items-center gap-3">
           {action}
           <WatchlistButton title={libraryTitle} />
+          {watched}
           {note && <span className="ml-1 text-sm text-ink-300 tabular-nums">{note}</span>}
         </div>
       </div>

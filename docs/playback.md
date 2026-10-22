@@ -85,7 +85,7 @@ For streams opened from a title page (`PlaybackRequest.media`), the player page 
 
 Resuming follows **Settings → Playback → Resume playback**: _Resume_ (the default) starts at the saved position through `loadfile`'s start position and shows a "Resumed from mm:ss · Start over" notice; _Ask_ holds the stream back and asks "Resume from mm:ss?" (Resume has focus) before loading; _Start over_ always starts at 0. Progress is saved in every mode.
 
-**Mark as watched at** (70–98 %, default 90 %) decides when progress counts as finished, which takes it off Continue watching. The core works the flag out as it saves progress (`library_record_progress` reads the setting and clamps it; `Library::record_progress_at`), and stores it, so a change applies to progress saved from then on and never rewrites history: a film already marked watched stays watched, and one at 85 % when the threshold drops to 80 % is marked the next time it is played. Stopping within 30 s of the end still counts as the end.
+**Mark as watched at** (70–98 %, default 90 %) decides when progress counts as finished, which takes it off Continue watching. The core works the flag out as it saves progress (`library_record_progress` reads the setting and clamps it; `Library::record_progress_at`), and stores it, so a change applies to progress saved from then on and never rewrites history: a film already marked watched stays watched, and one at 85 % when the threshold drops to 80 % is marked the next time it is played. Stopping within 30 s of the end still counts as the end. Films and episodes can also be marked watched or unwatched by hand, and titles taken off Continue watching: see [library.md](library.md).
 
 ## Choosing a stream
 

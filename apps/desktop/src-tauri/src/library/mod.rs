@@ -7,6 +7,12 @@
 //! Every row belongs to a profile (`crate::profiles`): [`Library::profile`]
 //! reads and writes one profile's rows only.
 //!
+//! Progress counts as watched automatically past the "Mark as watched at"
+//! threshold, or by hand ([`ProfileLibrary::mark_watched`]). A title can be
+//! taken off Continue watching without losing its history
+//! ([`ProfileLibrary::dismiss_from_continue_watching`]) until it is played
+//! again. See docs/library.md.
+//!
 //! - [`types`] — validated inputs and the records returned to the renderer
 
 pub mod types;
@@ -35,6 +41,8 @@ pub const DEFAULT_LIST_LIMIT: u32 = 100;
 pub const MAX_LIST_LIMIT: u32 = 1_000;
 /// Upper bound on the videos returned for one title (a long-running series).
 const MAX_TITLE_VIDEOS: u32 = 5_000;
+/// Upper bound on the watched films listed for posters.
+const MAX_WATCHED_TITLES: u32 = 20_000;
 
 const HISTORY_COLUMNS: &str = "type, id, video_id, name, poster, season, episode, video_name, \
                                position, duration, completed, updated_at";
@@ -220,13 +228,19 @@ impl ProfileLibrary<'_> {
     /// Titles to carry on with, newest first: unfinished progress worth
     /// resuming, plus series whose latest episode was finished (the renderer
     /// offers the next episode, or leaves the series out once it's over). A
-    /// film whose latest progress was finished is left out.
+    /// film whose latest progress was finished is left out, and so is a title
+    /// taken off the list since it was last played.
     pub fn continue_watching(&self, limit: Option<u32>) -> Result<Vec<HistoryEntry>> {
         // `MIN_RESUME_SECONDS` is a constant, not user input.
         self.latest_per_title(
             &format!(
                 "((completed = 0 AND position >= {MIN_RESUME_SECONDS:.1}) \
-                  OR (type = 'series' AND completed = 1))"
+                  OR (type = 'series' AND completed = 1)) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM continue_dismissed AS dismissed \
+                     WHERE dismissed.profile_id = ?2 AND dismissed.type = latest.type \
+                       AND dismissed.id = latest.id \
+                       AND dismissed.dismissed_at >= latest.updated_at)"
             ),
             limit,
         )
@@ -236,8 +250,9 @@ impl ProfileLibrary<'_> {
         self.latest_per_title_with(filter, limit, history_entry)
     }
 
-    /// The latest video of each title matching `filter`, newest first, read
-    /// with `read` from [`HISTORY_COLUMNS`] plus the title's played videos.
+    /// The latest video of each title matching `filter` (on the row `latest`;
+    /// the profile is `?2`), newest first, read with `read` from
+    /// [`HISTORY_COLUMNS`] plus the title's played videos.
     fn latest_per_title_with<T>(
         &self,
         filter: &str,
@@ -254,7 +269,7 @@ impl ProfileLibrary<'_> {
                      COUNT(*) OVER (PARTITION BY type, id) AS played_videos
                      FROM history
                      WHERE profile_id = ?2
-                 )
+                 ) AS latest
                  WHERE rank = 1 AND {filter}
                  ORDER BY updated_at DESC
                  LIMIT ?1"
@@ -269,41 +284,190 @@ impl ProfileLibrary<'_> {
     /// Whether a title is on the watchlist, and the progress of each of its
     /// videos that has been played (newest first).
     pub fn title_state(&self, r#type: &MediaType, id: &MediaId) -> Result<TitleLibraryState> {
-        self.database.with(|connection| {
-            let in_watchlist = is_listed(connection, self.profile, r#type, id)?;
-            let mut statement = connection.prepare(&format!(
-                "SELECT {HISTORY_COLUMNS} FROM history
-                 WHERE profile_id = ?4 AND type = ?1 AND id = ?2
-                 ORDER BY updated_at DESC LIMIT ?3"
-            ))?;
-            let progress = statement
-                .query_map(
-                    params![r#type.as_str(), id.as_str(), MAX_TITLE_VIDEOS, self.profile],
-                    history_entry,
-                )?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(TitleLibraryState {
-                in_watchlist,
-                progress,
-            })
-        })
+        self.database
+            .with(|connection| title_state(connection, self.profile, r#type, id))
     }
 
-    /// Forgets all progress for a title.
+    /// Forgets all progress for a title (and that it was taken off Continue
+    /// watching).
     pub fn remove_from_history(&self, r#type: &MediaType, id: &MediaId) -> Result<()> {
         self.database.with(|connection| {
-            connection.execute(
-                "DELETE FROM history WHERE profile_id = ?1 AND type = ?2 AND id = ?3",
-                params![self.profile, r#type.as_str(), id.as_str()],
-            )?;
+            let transaction = connection.transaction()?;
+            for table in ["history", "continue_dismissed"] {
+                transaction.execute(
+                    &format!("DELETE FROM {table} WHERE profile_id = ?1 AND type = ?2 AND id = ?3"),
+                    params![self.profile, r#type.as_str(), id.as_str()],
+                )?;
+            }
+            transaction.commit()?;
             Ok(())
         })
     }
 
     pub fn clear_history(&self) -> Result<()> {
         self.database.with(|connection| {
-            connection.execute("DELETE FROM history WHERE profile_id = ?1", [self.profile])?;
+            let transaction = connection.transaction()?;
+            for table in ["history", "continue_dismissed"] {
+                transaction.execute(
+                    &format!("DELETE FROM {table} WHERE profile_id = ?1"),
+                    [self.profile],
+                )?;
+            }
+            transaction.commit()?;
             Ok(())
+        })
+    }
+
+    // --- Continue watching -----------------------------------------------------
+
+    /// Takes a title off Continue watching, keeping its history and progress.
+    /// It comes back once it is played again (any episode, for a series), or
+    /// with [`Self::restore_to_continue_watching`]. A title with no history
+    /// is left alone.
+    pub fn dismiss_from_continue_watching(&self, r#type: &MediaType, id: &MediaId) -> Result<()> {
+        let now = (self.clock)();
+        self.database.with(|connection| {
+            // Not before its latest progress, which may be dated ahead of this
+            // computer's clock (imported from another device).
+            connection.execute(
+                "INSERT INTO continue_dismissed (profile_id, type, id, dismissed_at)
+                 SELECT ?1, ?2, ?3, MAX(?4, MAX(updated_at)) FROM history
+                 WHERE profile_id = ?1 AND type = ?2 AND id = ?3
+                 HAVING COUNT(*) > 0
+                 ON CONFLICT (profile_id, type, id) DO UPDATE SET
+                     dismissed_at = excluded.dismissed_at",
+                params![self.profile, r#type.as_str(), id.as_str(), now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Undoes [`Self::dismiss_from_continue_watching`].
+    pub fn restore_to_continue_watching(&self, r#type: &MediaType, id: &MediaId) -> Result<()> {
+        self.database.with(|connection| {
+            connection.execute(
+                "DELETE FROM continue_dismissed WHERE profile_id = ?1 AND type = ?2 AND id = ?3",
+                params![self.profile, r#type.as_str(), id.as_str()],
+            )?;
+            Ok(())
+        })
+    }
+
+    // --- Marking by hand -------------------------------------------------------
+
+    /// Marks videos of `title` as watched (finished), as if they had just
+    /// been watched in the order given, so the last one becomes the title's
+    /// latest: Continue watching then offers the episode after it. Saved
+    /// progress moves to the end of each video; a video never played gets a
+    /// row with no known duration (0).
+    ///
+    /// Marking episodes that all come before the series' latest one (say,
+    /// earlier seasons while partway through a later one) doesn't move
+    /// Continue watching back: they are dated just before that episode.
+    pub fn mark_watched(
+        &self,
+        title: &TitleSnapshot,
+        videos: &WatchedVideos,
+    ) -> Result<TitleLibraryState> {
+        let now = (self.clock)();
+        let videos = videos.as_slice();
+        self.database.with(|connection| {
+            let transaction = connection.transaction()?;
+            let latest = transaction
+                .query_row(
+                    "SELECT updated_at, video_id, season, episode FROM history
+                     WHERE profile_id = ?1 AND type = ?2 AND id = ?3
+                     ORDER BY updated_at DESC, video_id LIMIT 1",
+                    params![self.profile, title.r#type.as_str(), title.id.as_str()],
+                    |row| {
+                        Ok(Latest {
+                            updated_at: row.get(0)?,
+                            video_id: row.get(1)?,
+                            number: episode_number(row.get(2)?, row.get(3)?),
+                        })
+                    },
+                )
+                .optional()?;
+            let last = match &latest {
+                Some(latest) if latest.is_after(videos) => latest.updated_at - 1,
+                Some(latest) => now.max(latest.updated_at + 1),
+                None => now,
+            };
+            let count = i64::try_from(videos.len()).unwrap_or(i64::MAX);
+            for (video, index) in videos.iter().zip(0_i64..) {
+                transaction.execute(
+                    "INSERT INTO history (profile_id, type, id, video_id, name, poster, season,
+                                          episode, video_name, position, duration, completed,
+                                          updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 1, ?10)
+                     ON CONFLICT (profile_id, type, id, video_id) DO UPDATE SET
+                         name = excluded.name, poster = excluded.poster,
+                         season = COALESCE(excluded.season, history.season),
+                         episode = COALESCE(excluded.episode, history.episode),
+                         video_name = COALESCE(excluded.video_name, history.video_name),
+                         position = history.duration, completed = 1,
+                         updated_at = excluded.updated_at",
+                    params![
+                        self.profile,
+                        title.r#type.as_str(),
+                        title.id.as_str(),
+                        video.id.as_str(),
+                        title.name.as_str(),
+                        title.poster.as_ref().map(PosterUrl::as_str),
+                        video.season,
+                        video.episode,
+                        video.name.as_ref().map(DisplayName::as_str),
+                        last - (count - 1 - index),
+                    ],
+                )?;
+            }
+            let state = title_state(&transaction, self.profile, &title.r#type, &title.id)?;
+            transaction.commit()?;
+            Ok(state)
+        })
+    }
+
+    /// Marks videos of a title as unwatched: their progress is forgotten, so
+    /// they show as never played. The title's other videos are kept.
+    pub fn mark_unwatched(
+        &self,
+        r#type: &MediaType,
+        id: &MediaId,
+        videos: &VideoIds,
+    ) -> Result<TitleLibraryState> {
+        self.database.with(|connection| {
+            let transaction = connection.transaction()?;
+            for video in videos.as_slice() {
+                transaction.execute(
+                    "DELETE FROM history
+                     WHERE profile_id = ?1 AND type = ?2 AND id = ?3 AND video_id = ?4",
+                    params![self.profile, r#type.as_str(), id.as_str(), video.as_str()],
+                )?;
+            }
+            let state = title_state(&transaction, self.profile, r#type, id)?;
+            transaction.commit()?;
+            Ok(state)
+        })
+    }
+
+    /// Titles whose own video is watched: finished films, for the watched
+    /// tick on posters. (A series is never one video.)
+    pub fn watched_titles(&self) -> Result<Vec<TitleRef>> {
+        self.database.with(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT type, id FROM history
+                 WHERE profile_id = ?1 AND video_id = id AND completed = 1
+                 ORDER BY updated_at DESC LIMIT ?2",
+            )?;
+            let titles = statement
+                .query_map(params![self.profile, MAX_WATCHED_TITLES], |row| {
+                    Ok(TitleRef {
+                        r#type: MediaType::from_db(row.get(0)?),
+                        id: MediaId::from_db(row.get(1)?),
+                    })
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(titles)
         })
     }
 
@@ -407,6 +571,57 @@ impl ProfileLibrary<'_> {
             Ok(counts)
         })
     }
+}
+
+/// A title's latest played video, when marking others watched.
+struct Latest {
+    updated_at: i64,
+    video_id: String,
+    number: Option<(u32, u32)>,
+}
+
+impl Latest {
+    /// Whether this episode comes after every one of `videos`, by season and
+    /// episode number (specials, season 0, come before season 1).
+    fn is_after(&self, videos: &[VideoSnapshot]) -> bool {
+        let Some(latest) = self.number else {
+            return false;
+        };
+        videos.iter().all(|video| {
+            video.id.as_str() != self.video_id
+                && episode_number(video.season, video.episode).is_some_and(|number| number < latest)
+        })
+    }
+}
+
+fn episode_number(season: Option<u32>, episode: Option<u32>) -> Option<(u32, u32)> {
+    Some((season?, episode?))
+}
+
+/// Whether a title is on the watchlist, and the progress of each of its
+/// played videos (newest first).
+fn title_state(
+    connection: &rusqlite::Connection,
+    profile: i64,
+    r#type: &MediaType,
+    id: &MediaId,
+) -> Result<TitleLibraryState> {
+    let in_watchlist = is_listed(connection, profile, r#type, id)?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT {HISTORY_COLUMNS} FROM history
+         WHERE profile_id = ?4 AND type = ?1 AND id = ?2
+         ORDER BY updated_at DESC, video_id LIMIT ?3"
+    ))?;
+    let progress = statement
+        .query_map(
+            params![r#type.as_str(), id.as_str(), MAX_TITLE_VIDEOS, profile],
+            history_entry,
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(TitleLibraryState {
+        in_watchlist,
+        progress,
+    })
 }
 
 fn is_listed(
@@ -889,6 +1104,326 @@ mod tests {
         // ordered by when it was watched.
         let resume = library.continue_watching(None).unwrap();
         assert_eq!(ids(&resume), [("tt2", "tt2:1:1"), ("tt1", "tt1")]);
+    }
+
+    fn series_type() -> MediaType {
+        MediaType::parse("series").unwrap()
+    }
+
+    fn media_id(id: &str) -> MediaId {
+        MediaId::parse(id).unwrap()
+    }
+
+    /// Episodes `S{season}E{n}` of the show `tt4`, for `numbers` in order.
+    fn episodes(season: u32, numbers: impl IntoIterator<Item = u32>) -> WatchedVideos {
+        let videos: Vec<_> = numbers
+            .into_iter()
+            .map(|episode| json!({ "id": format!("tt4:{season}:{episode}"), "season": season, "episode": episode }))
+            .collect();
+        serde_json::from_value(json!(videos)).unwrap()
+    }
+
+    fn video_ids(ids: &[&str]) -> VideoIds {
+        serde_json::from_value(json!(ids)).unwrap()
+    }
+
+    fn continuing(library: &ProfileLibrary<'_>) -> Vec<(String, String, bool)> {
+        library
+            .continue_watching(None)
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.title.id.as_str().to_owned(),
+                    entry.video.id.as_str().to_owned(),
+                    entry.completed,
+                )
+            })
+            .collect()
+    }
+
+    fn own(entries: &[(&str, &str, bool)]) -> Vec<(String, String, bool)> {
+        entries
+            .iter()
+            .map(|(title, video, completed)| ((*title).to_owned(), (*video).to_owned(), *completed))
+            .collect()
+    }
+
+    #[test]
+    fn dismissing_hides_a_title_from_continue_watching_until_it_is_played_again() {
+        let fixture = Fixture::new();
+        let library = &fixture.library();
+        let film = title("movie", "tt1", "Film");
+        let show = title("series", "tt4", "Show");
+        library
+            .record_progress(progress(&film, "tt1", 600.0, 6000.0))
+            .unwrap();
+        library
+            .record_progress(progress(&show, "tt4:1:1", 1400.0, 1400.0))
+            .unwrap();
+        assert_eq!(
+            continuing(library),
+            own(&[("tt4", "tt4:1:1", true), ("tt1", "tt1", false)])
+        );
+
+        library
+            .dismiss_from_continue_watching(&film.r#type, &film.id)
+            .unwrap();
+        library
+            .dismiss_from_continue_watching(&show.r#type, &show.id)
+            .unwrap();
+        assert!(continuing(library).is_empty());
+        // History and progress are kept.
+        assert_eq!(library.history(None).unwrap().len(), 2);
+        let state = library.title_state(&film.r#type, &film.id).unwrap();
+        assert_eq!(state.progress[0].position, 600.0);
+        // Still hidden after a restart.
+        assert!(
+            fixture
+                .reopen()
+                .0
+                .profile(FIRST_PROFILE)
+                .continue_watching(None)
+                .unwrap()
+                .is_empty()
+        );
+
+        // Undo brings the film back.
+        library
+            .restore_to_continue_watching(&film.r#type, &film.id)
+            .unwrap();
+        assert_eq!(continuing(library), own(&[("tt1", "tt1", false)]));
+
+        // Watching the series' next episode brings it back too.
+        library
+            .record_progress(progress(&show, "tt4:1:2", 200.0, 1400.0))
+            .unwrap();
+        assert_eq!(
+            continuing(library),
+            own(&[("tt4", "tt4:1:2", false), ("tt1", "tt1", false)])
+        );
+
+        // Dismissing a title with no history stores nothing.
+        library
+            .dismiss_from_continue_watching(&series_type(), &media_id("tt9"))
+            .unwrap();
+        let dismissed: i64 = fixture
+            .all
+            .database
+            .with(|c| {
+                Ok(
+                    c.query_row("SELECT COUNT(*) FROM continue_dismissed", [], |row| {
+                        row.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(dismissed, 1, "only the show's old dismissal");
+    }
+
+    #[test]
+    fn dismissing_covers_progress_dated_ahead_and_forgetting_history_forgets_it() {
+        let fixture = Fixture::new();
+        let library = &fixture.library();
+        let film = title("movie", "tt1", "Film");
+        // Imported from a device whose clock runs ahead.
+        library
+            .import_history(&[imported(&film, "tt1", 500.0, false, 4_000_000_000_000)])
+            .unwrap();
+        library
+            .dismiss_from_continue_watching(&film.r#type, &film.id)
+            .unwrap();
+        assert!(continuing(library).is_empty());
+
+        library.remove_from_history(&film.r#type, &film.id).unwrap();
+        library
+            .record_progress(progress(&film, "tt1", 600.0, 6000.0))
+            .unwrap();
+        assert_eq!(continuing(library), own(&[("tt1", "tt1", false)]));
+
+        library
+            .dismiss_from_continue_watching(&film.r#type, &film.id)
+            .unwrap();
+        library.clear_history().unwrap();
+        library
+            .record_progress(progress(&film, "tt1", 600.0, 6000.0))
+            .unwrap();
+        assert_eq!(continuing(library), own(&[("tt1", "tt1", false)]));
+    }
+
+    #[test]
+    fn marking_a_film_watched_and_unwatched() {
+        let fixture = Fixture::new();
+        let library = &fixture.library();
+        let film = title("movie", "tt1", "Film");
+        let never_played = title("movie", "tt2", "Never played");
+        library
+            .record_progress(progress(&film, "tt1", 600.0, 6000.0))
+            .unwrap();
+        let only_the_film: WatchedVideos =
+            serde_json::from_value(json!([{ "id": "tt1" }])).unwrap();
+
+        let state = library.mark_watched(&film, &only_the_film).unwrap();
+        let entry = &state.progress[0];
+        assert!(entry.completed);
+        assert_eq!((entry.position, entry.duration), (6000.0, 6000.0));
+        assert!(
+            continuing(library).is_empty(),
+            "a watched film leaves Continue watching"
+        );
+
+        let state = library
+            .mark_watched(
+                &never_played,
+                &serde_json::from_value(json!([{ "id": "tt2" }])).unwrap(),
+            )
+            .unwrap();
+        assert!(state.progress[0].completed);
+        assert_eq!(state.progress[0].duration, 0.0, "no known duration");
+        let mut watched: Vec<_> = library
+            .watched_titles()
+            .unwrap()
+            .into_iter()
+            .map(|title| title.id.as_str().to_owned())
+            .collect();
+        watched.sort();
+        assert_eq!(watched, ["tt1", "tt2"]);
+
+        // Unwatched: as if never played.
+        let state = library
+            .mark_unwatched(&film.r#type, &film.id, &video_ids(&["tt1"]))
+            .unwrap();
+        assert!(state.progress.is_empty());
+        assert_eq!(titles(&library.history(None).unwrap()), [("tt2", "tt2")]);
+        assert_eq!(library.watched_titles().unwrap().len(), 1);
+
+        // Played again, it counts by the usual rule.
+        library
+            .record_progress(progress(&never_played, "tt2", 100.0, 5000.0))
+            .unwrap();
+        assert!(library.watched_titles().unwrap().is_empty());
+        assert_eq!(continuing(library), own(&[("tt2", "tt2", false)]));
+    }
+
+    #[test]
+    fn marking_episodes_watched_moves_continue_watching_on() {
+        let fixture = Fixture::new();
+        let library = &fixture.library();
+        let show = title("series", "tt4", "Show");
+        library
+            .record_progress(progress(&show, "tt4:1:2", 300.0, 1400.0))
+            .unwrap();
+
+        // The episode being watched: finished, so the next one is offered.
+        let state = library.mark_watched(&show, &episodes(1, [2])).unwrap();
+        assert!(state.progress[0].completed);
+        assert_eq!(state.progress[0].position, 1400.0);
+        assert_eq!(continuing(library), own(&[("tt4", "tt4:1:2", true)]));
+
+        // "Up to here" on episode 5: the last one marked is the latest.
+        let state = library.mark_watched(&show, &episodes(1, 1..=5)).unwrap();
+        let order: Vec<_> = state.progress.iter().map(|e| e.video.id.as_str()).collect();
+        assert_eq!(
+            order,
+            ["tt4:1:5", "tt4:1:4", "tt4:1:3", "tt4:1:2", "tt4:1:1"]
+        );
+        assert!(state.progress.iter().all(|entry| entry.completed));
+        assert_eq!(continuing(library), own(&[("tt4", "tt4:1:5", true)]));
+        // The history shows the series once, with every marked episode.
+        assert_eq!(library.history(None).unwrap()[0].played_videos, 5);
+
+        // A whole season: Continue watching moves on to the one after it.
+        library.mark_watched(&show, &episodes(1, 1..=8)).unwrap();
+        assert_eq!(continuing(library), own(&[("tt4", "tt4:1:8", true)]));
+
+        // Unwatching the last ones goes back to the latest still watched.
+        library
+            .mark_unwatched(&show.r#type, &show.id, &video_ids(&["tt4:1:7", "tt4:1:8"]))
+            .unwrap();
+        assert_eq!(continuing(library), own(&[("tt4", "tt4:1:6", true)]));
+    }
+
+    #[test]
+    fn marking_earlier_episodes_keeps_the_episode_in_progress() {
+        let fixture = Fixture::new();
+        let library = &fixture.library();
+        let show = title("series", "tt4", "Show");
+        let mut in_progress = progress(&show, "tt4:2:3", 500.0, 1400.0);
+        in_progress.video.season = Some(2);
+        in_progress.video.episode = Some(3);
+        library.record_progress(in_progress).unwrap();
+
+        // Catching up on season 1 and a special leaves season 2 to resume.
+        library.mark_watched(&show, &episodes(1, 1..=10)).unwrap();
+        library.mark_watched(&show, &episodes(0, [1])).unwrap();
+        assert_eq!(continuing(library), own(&[("tt4", "tt4:2:3", false)]));
+        let state = library.title_state(&show.r#type, &show.id).unwrap();
+        assert_eq!(state.progress.len(), 12);
+        assert_eq!(state.progress[0].video.id.as_str(), "tt4:2:3");
+
+        // Marking the episode in progress (or later ones) moves on.
+        library.mark_watched(&show, &episodes(2, [3])).unwrap();
+        assert_eq!(continuing(library), own(&[("tt4", "tt4:2:3", true)]));
+    }
+
+    #[test]
+    fn marks_and_dismissals_belong_to_the_active_profile() {
+        let fixture = Fixture::new();
+        fixture
+            .all
+            .database
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO profiles (id, name, avatar, created_at) VALUES (2, 'Sam', 'teal', 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let me = fixture.library();
+        let sam = fixture
+            .all
+            .profile(serde_json::from_value(json!(2)).unwrap());
+        let film = title("movie", "tt1", "Film");
+        let show = title("series", "tt4", "Show");
+        for library in [&me, &sam] {
+            library
+                .record_progress(progress(&film, "tt1", 600.0, 6000.0))
+                .unwrap();
+            library
+                .record_progress(progress(&show, "tt4:1:1", 600.0, 1400.0))
+                .unwrap();
+        }
+
+        me.dismiss_from_continue_watching(&film.r#type, &film.id)
+            .unwrap();
+        me.mark_watched(&show, &episodes(1, 1..=2)).unwrap();
+        assert_eq!(continuing(&me), own(&[("tt4", "tt4:1:2", true)]));
+        assert_eq!(
+            continuing(&sam),
+            own(&[("tt4", "tt4:1:1", false), ("tt1", "tt1", false)])
+        );
+
+        sam.mark_unwatched(&show.r#type, &show.id, &video_ids(&["tt4:1:1"]))
+            .unwrap();
+        sam.mark_watched(
+            &film,
+            &serde_json::from_value(json!([{ "id": "tt1" }])).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            me.title_state(&show.r#type, &show.id)
+                .unwrap()
+                .progress
+                .len(),
+            2
+        );
+        assert!(me.watched_titles().unwrap().is_empty());
+        assert_eq!(sam.watched_titles().unwrap().len(), 1);
+        // Sam's undo doesn't touch Me's dismissal.
+        sam.restore_to_continue_watching(&film.r#type, &film.id)
+            .unwrap();
+        assert_eq!(continuing(&me), own(&[("tt4", "tt4:1:2", true)]));
     }
 
     #[test]

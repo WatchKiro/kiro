@@ -32,6 +32,7 @@ function fakeBackend() {
   let clock = 0;
   let watchlist: WatchlistItem[] = [];
   let history: HistoryEntry[] = [];
+  const dismissed = new Map<string, number>();
   const same = (type: string, id: string) => (entry: { title: LibraryTitle }) =>
     entry.title.type === type && entry.title.id === id;
   const latestPerTitle = () =>
@@ -42,6 +43,10 @@ function fakeBackend() {
           sorted.findIndex(same(entry.title.type, entry.title.id)) === index,
       );
   const calls: string[] = [];
+  const titleState = (type: string, id: string) => ({
+    inWatchlist: watchlist.some(same(type, id)),
+    progress: history.filter(same(type, id)).toSorted((a, b) => b.updatedAt - a.updatedAt),
+  });
 
   const backend: LibraryBackend = {
     watchlist: () => Promise.resolve(watchlist),
@@ -77,14 +82,46 @@ function fakeBackend() {
     continueWatching: (limit) =>
       Promise.resolve(
         latestPerTitle()
-          .filter((entry) => !entry.completed)
+          .filter(
+            (entry) =>
+              !entry.completed &&
+              !(
+                (dismissed.get(titleKey(entry.title.type, entry.title.id)) ?? -1) >= entry.updatedAt
+              ),
+          )
           .slice(0, limit),
       ),
-    titleState: (type, id) =>
-      Promise.resolve({
-        inWatchlist: watchlist.some(same(type, id)),
-        progress: history.filter(same(type, id)),
-      }),
+    titleState: (type, id) => Promise.resolve(titleState(type, id)),
+    dismissFromContinue: (type, id) => {
+      dismissed.set(titleKey(type, id), clock);
+      return Promise.resolve();
+    },
+    restoreToContinue: (type, id) => {
+      dismissed.delete(titleKey(type, id));
+      return Promise.resolve();
+    },
+    markWatched: (title, videos) => {
+      calls.push(`mark ${videos.map((video) => video.id).join(' ')}`);
+      for (const video of videos) {
+        history = [
+          { title, video, position: 1000, duration: 1000, completed: true, updatedAt: ++clock },
+          ...history.filter((other) => other.video.id !== video.id),
+        ];
+      }
+      return Promise.resolve(titleState(title.type, title.id));
+    },
+    markUnwatched: (type, id, videos) => {
+      history = history.filter(
+        (entry) => !(same(type, id)(entry) && videos.includes(entry.video.id)),
+      );
+      return Promise.resolve(titleState(type, id));
+    },
+    watchedTitles: () =>
+      Promise.resolve(
+        history
+          .filter((entry) => entry.video.id === entry.title.id && entry.completed)
+          .map(({ title }) => ({ type: title.type, id: title.id })),
+      ),
     removeFromHistory: (type, id) => {
       history = history.filter((entry) => !same(type, id)(entry));
       return Promise.resolve();
@@ -216,5 +253,89 @@ describe('library store', () => {
     await store.getState().clearHistory();
     assert.deepEqual(store.getState().history.items, []);
     assert.deepEqual(store.getState().titles[titleKey(show.type, show.id)]?.progress, []);
+  });
+
+  it('takes titles off Continue watching, and puts them back', async () => {
+    const store = createLibraryStore(fake.backend);
+    await fake.backend.recordProgress(progress(movie, 'tt1', 300));
+    await fake.backend.recordProgress(progress(show, 'tt2:1:1', 300));
+    await store.getState().load('continueWatching');
+    await store.getState().load('history');
+    const continuing = () => store.getState().continueWatching.items.map((entry) => entry.title.id);
+    assert.deepEqual(continuing(), ['tt2', 'tt1']);
+
+    await store.getState().dismissFromContinue(show.type, show.id);
+    assert.deepEqual(continuing(), ['tt1']);
+    // History is untouched.
+    assert.equal(store.getState().history.items.length, 2);
+    await store.getState().load('continueWatching');
+    assert.deepEqual(continuing(), ['tt1']);
+
+    await store.getState().restoreToContinue(show.type, show.id);
+    assert.deepEqual(continuing(), ['tt2', 'tt1']);
+  });
+
+  it('marks videos watched and unwatched, keeping title state, lists and ticks current', async () => {
+    const store = createLibraryStore(fake.backend);
+    await fake.backend.recordProgress(progress(movie, 'tt1', 300));
+    await store.getState().loadWatchedFilms();
+    await store.getState().load('continueWatching');
+    const watched = () => Object.keys(store.getState().watchedFilms.keys);
+    assert.deepEqual(watched(), []);
+
+    await store
+      .getState()
+      .markWatched(movie, [{ id: 'tt1', season: null, episode: null, name: null }]);
+    assert.equal(
+      store.getState().titles[titleKey(movie.type, movie.id)]?.progress[0]?.completed,
+      true,
+    );
+    assert.deepEqual(watched(), [titleKey(movie.type, movie.id)]);
+    // The loaded list was read again: a watched film leaves Continue watching.
+    assert.deepEqual(store.getState().continueWatching.items, []);
+    // Lists never loaded stay that way.
+    assert.equal(store.getState().history.status, 'idle');
+
+    await store.getState().markUnwatched(movie, ['tt1']);
+    assert.deepEqual(store.getState().titles[titleKey(movie.type, movie.id)]?.progress, []);
+    assert.deepEqual(watched(), []);
+
+    // Episodes never make a series "watched" for posters.
+    await store.getState().markWatched(show, [
+      { id: 'tt2:1:1', season: 1, episode: 1, name: null },
+      { id: 'tt2:1:2', season: 1, episode: 2, name: null },
+    ]);
+    assert.deepEqual(
+      store
+        .getState()
+        .titles[titleKey(show.type, show.id)]?.progress.map((entry) => entry.video.id),
+      ['tt2:1:2', 'tt2:1:1'],
+    );
+    assert.deepEqual(watched(), []);
+
+    // Progress and history changes update the ticks too.
+    await store.getState().recordProgress({ ...progress(movie, 'tt1', 950) });
+    assert.deepEqual(watched(), [titleKey(movie.type, movie.id)]);
+    await store.getState().removeFromHistory(movie.type, movie.id);
+    assert.deepEqual(watched(), []);
+  });
+
+  it('reads watched films once, and forgets them with the profile', async () => {
+    let reads = 0;
+    const store = createLibraryStore({
+      ...fake.backend,
+      watchedTitles: () => {
+        reads += 1;
+        return Promise.resolve([{ type: 'movie', id: 'tt1' }]);
+      },
+    });
+    await Promise.all([store.getState().loadWatchedFilms(), store.getState().loadWatchedFilms()]);
+    await store.getState().loadWatchedFilms();
+    assert.equal(reads, 1);
+    assert.equal(store.getState().watchedFilms.status, 'ready');
+    assert.deepEqual(Object.keys(store.getState().watchedFilms.keys), [titleKey('movie', 'tt1')]);
+
+    store.getState().clear();
+    assert.deepEqual(store.getState().watchedFilms, { status: 'idle', keys: {} });
   });
 });

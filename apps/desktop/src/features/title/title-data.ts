@@ -2,7 +2,7 @@ import { supportsResource, type Stream, type Video } from '@kiro/addon-sdk';
 
 import type { InstalledAddon } from '@/features/addons/addons-store';
 import type { PlaybackMedia } from '@/features/playback/playback-request';
-import type { LibraryTitle } from '@/services/native';
+import type { LibraryTitle, LibraryVideo } from '@/services/native';
 
 /** Route of a title's page. */
 export function titlePath(type: string, id: string) {
@@ -146,22 +146,29 @@ export function episodeAfter(seasons: Season[], videoId: string): Video | undefi
 }
 
 /** Every episode in viewing order: regular seasons in order, specials only if alone. */
-function watchOrder(seasons: Season[]): Video[] {
+export function watchOrder(seasons: Season[]): Video[] {
   const regular = seasons.filter((season) => season.number !== 0);
   return (regular.length > 0 ? regular : seasons).flatMap((season) => season.episodes);
 }
 
 /** What the library records for playing an episode of `title`. */
 export function episodeMedia(title: LibraryTitle, video: Video): PlaybackMedia {
+  return { title, video: librarySnapshot(video) };
+}
+
+/** What the library records about an episode. */
+export function librarySnapshot(video: Video): LibraryVideo {
   return {
-    title,
-    video: {
-      id: video.id,
-      season: video.season ?? null,
-      episode: video.episode ?? null,
-      name: video.title?.trim() || video.name?.trim() || null,
-    },
+    id: video.id,
+    season: video.season ?? null,
+    episode: video.episode ?? null,
+    name: video.title?.trim() || video.name?.trim() || null,
   };
+}
+
+/** What the library records for playing a film: the film itself. */
+export function movieMedia(title: LibraryTitle): PlaybackMedia {
+  return { title, video: { id: title.id, season: null, episode: null, name: null } };
 }
 
 /** e.g. `S1 E2 · Pilot`, or `Special 3 · Behind the scenes`. */

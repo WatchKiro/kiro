@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-watched-titles"
+description = "Enables the library_watched_titles command without any pre-configured scope."
+commands.allow = ["library_watched_titles"]
+
+[[permission]]
+identifier = "deny-library-watched-titles"
+description = "Denies the library_watched_titles command without any pre-configured scope."
+commands.deny = ["library_watched_titles"]

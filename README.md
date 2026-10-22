@@ -405,6 +405,10 @@ People sharing a computer each get their own profile: their own watchlist, histo
 
 A new install can browse (Cinemeta, OpenSubtitles) but has nothing to play until the user adds an addon that provides streams. A first-run welcome says so and offers adding an addon by its link or importing from Stremio; it is skippable, recorded per profile, and opens again from Settings → Addons. Kiro recommends no stream sources. See [docs/first-run.md](docs/first-run.md).
 
+### Watch history
+
+Continue watching, the watched ticks and History come from the core's per-profile watch history. Titles can be taken off Continue watching (with Undo) until they are played again, and films, episodes, seasons and whole shows marked watched or unwatched from their menus (the "⋯", a right click, or the Menu key). See [docs/library.md](docs/library.md).
+
 ### Routing and performance
 
 React Router (data router). Discover is bundled eagerly as the start screen; every other section is a lazy route chunk. Fonts are the operating system's own, so nothing is downloaded at startup and the app works offline.

@@ -4,7 +4,10 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import { CardMenu } from '@/components/action-menu';
 import { displayableImage } from '@/features/addons/catalog';
+import { WatchedTick } from '@/features/library/library-poster';
+import { filmActions, useWatchedFilm } from '@/features/library/watch-actions';
 import { titlePath } from '@/features/title/title-data';
 
 type PosterShape = NonNullable<MetaPreview['posterShape']>;
@@ -68,47 +71,61 @@ export function PosterGrid({ items }: { items: MetaPreview[] }) {
   );
 }
 
+/**
+ * A catalogue item. A film shows a tick once watched, and its menu (the "⋯",
+ * a right click or the Menu key) marks it watched or unwatched.
+ */
 export function PosterCard({ item }: { item: MetaPreview }) {
   const [failed, setFailed] = useState(false);
   const poster = displayableImage(item.poster);
+  const watched = useWatchedFilm(item.type, item.id);
+  const title = {
+    type: item.type,
+    id: item.id,
+    name: item.name.trim() || item.id,
+    poster: poster ?? null,
+  };
 
   return (
-    <Link
-      to={titlePath(item.type, item.id)}
-      title={item.name}
-      className="group block rounded-xl outline-none"
-    >
-      <div
-        className={cx(
-          'relative overflow-hidden rounded-xl bg-linear-to-b from-white/[0.07] to-white/[0.02] shadow-[0_0_0_1px_rgb(255_255_255/0.06),0_14px_30px_-16px_rgb(0_0_0/0.9)] transition duration-300 ease-out-soft group-hover:shadow-[0_0_0_1px_rgb(255_255_255/0.22),0_18px_40px_-16px_rgb(0_0_0/0.9)] group-focus-visible:focus-lift',
-          SHAPES[item.posterShape ?? 'poster'],
-        )}
+    <CardMenu label={title.name} actions={filmActions(title, watched)}>
+      <Link
+        to={titlePath(item.type, item.id)}
+        title={item.name}
+        className="group block rounded-xl outline-none"
       >
-        {poster && !failed ? (
-          <img
-            src={poster}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setFailed(true)}
-            className="size-full object-cover transition duration-500 ease-out-soft group-hover:scale-[1.04]"
-          />
-        ) : (
-          <span className="absolute inset-0 flex items-center justify-center p-3 text-center text-sm font-medium text-ink-300">
+        <div
+          className={cx(
+            'relative overflow-hidden rounded-xl bg-linear-to-b from-white/[0.07] to-white/[0.02] shadow-[0_0_0_1px_rgb(255_255_255/0.06),0_14px_30px_-16px_rgb(0_0_0/0.9)] transition duration-300 ease-out-soft group-hover:shadow-[0_0_0_1px_rgb(255_255_255/0.22),0_18px_40px_-16px_rgb(0_0_0/0.9)] group-focus-visible:focus-lift',
+            SHAPES[item.posterShape ?? 'poster'],
+          )}
+        >
+          {poster && !failed ? (
+            <img
+              src={poster}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              onError={() => setFailed(true)}
+              className="size-full object-cover transition duration-500 ease-out-soft group-hover:scale-[1.04]"
+            />
+          ) : (
+            <span className="absolute inset-0 flex items-center justify-center p-3 text-center text-sm font-medium text-ink-300">
+              {item.name}
+            </span>
+          )}
+          {watched && <WatchedTick />}
+        </div>
+        <div className="mt-2.5 px-0.5">
+          <p className="truncate text-[13px] font-medium text-ink-100 group-hover:text-ink-50 group-focus-visible:text-ink-50">
             {item.name}
-          </span>
-        )}
-      </div>
-      <div className="mt-2.5 px-0.5">
-        <p className="truncate text-[13px] font-medium text-ink-100 group-hover:text-ink-50 group-focus-visible:text-ink-50">
-          {item.name}
-        </p>
-        {item.releaseInfo && (
-          <p className="mt-0.5 truncate text-xs text-ink-500 tabular-nums">{item.releaseInfo}</p>
-        )}
-      </div>
-    </Link>
+          </p>
+          {item.releaseInfo && (
+            <p className="mt-0.5 truncate text-xs text-ink-500 tabular-nums">{item.releaseInfo}</p>
+          )}
+        </div>
+      </Link>
+    </CardMenu>
   );
 }
 

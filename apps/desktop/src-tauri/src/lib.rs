@@ -89,6 +89,11 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             commands::library::library_title_state,
             commands::library::library_history_remove,
             commands::library::library_history_clear,
+            commands::library::library_continue_dismiss,
+            commands::library::library_continue_restore,
+            commands::library::library_mark_watched,
+            commands::library::library_mark_unwatched,
+            commands::library::library_watched_titles,
             commands::settings::settings_get,
             commands::settings::settings_set,
             commands::profiles::profile_list,
@@ -149,6 +154,11 @@ fn app_builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::library::library_title_state,
         commands::library::library_history_remove,
         commands::library::library_history_clear,
+        commands::library::library_continue_dismiss,
+        commands::library::library_continue_restore,
+        commands::library::library_mark_watched,
+        commands::library::library_mark_unwatched,
+        commands::library::library_watched_titles,
         commands::settings::settings_get,
         commands::settings::settings_set,
         commands::profiles::profile_list,
@@ -715,6 +725,91 @@ mod tests {
     }
 
     #[test]
+    fn watch_marks_and_continue_watching_commands_round_trip() {
+        let app = TestApp::new("marks");
+        let call = |cmd: &str, args: Value| -> Value {
+            app.invoke(cmd, args)
+                .unwrap_or_else(|error| panic!("{cmd} should be permitted: {error}"))
+                .deserialize()
+                .unwrap()
+        };
+        let show = json!({ "type": "series", "id": "tt2", "name": "Show", "poster": null });
+        let film = json!({ "type": "movie", "id": "tt1", "name": "Film", "poster": null });
+        call(
+            "library_record_progress",
+            json!({ "progress": {
+                "title": film,
+                "video": { "id": "tt1", "season": null, "episode": null },
+                "position": 300,
+                "duration": 1500,
+            }}),
+        );
+        let ids = |list: &Value| -> Vec<Value> {
+            list.as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["video"]["id"].clone())
+                .collect()
+        };
+        // Continue watching, in id order (saves within the same millisecond tie).
+        let continuing = || -> Vec<String> {
+            let mut found: Vec<_> = ids(&call("library_continue_watching", json!({})))
+                .into_iter()
+                .map(|id| id.as_str().unwrap().to_owned())
+                .collect();
+            found.sort();
+            found
+        };
+
+        // Marking episodes returns the title's state, latest first.
+        let state = call(
+            "library_mark_watched",
+            json!({ "title": show, "videos": [
+                { "id": "tt2:1:1", "season": 1, "episode": 1, "name": "Pilot" },
+                { "id": "tt2:1:2", "season": 1, "episode": 2, "name": null },
+            ]}),
+        );
+        assert_eq!(
+            ids(&state["progress"]),
+            [json!("tt2:1:2"), json!("tt2:1:1")]
+        );
+        assert_eq!(state["progress"][1]["video"]["name"], "Pilot");
+        assert_eq!(state["progress"][0]["completed"], true);
+        assert_eq!(continuing(), ["tt1", "tt2:1:2"]);
+
+        call(
+            "library_continue_dismiss",
+            json!({ "type": "series", "id": "tt2" }),
+        );
+        assert_eq!(continuing(), ["tt1"]);
+        call(
+            "library_continue_restore",
+            json!({ "type": "series", "id": "tt2" }),
+        );
+        assert_eq!(continuing(), ["tt1", "tt2:1:2"]);
+
+        call(
+            "library_mark_watched",
+            json!({ "title": film, "videos": [{ "id": "tt1" }] }),
+        );
+        assert_eq!(
+            call("library_watched_titles", json!({})),
+            json!([{ "type": "movie", "id": "tt1" }])
+        );
+        let state = call(
+            "library_mark_unwatched",
+            json!({ "type": "series", "id": "tt2", "videos": ["tt2:1:2"] }),
+        );
+        assert_eq!(ids(&state["progress"]), [json!("tt2:1:1")]);
+        let state = call(
+            "library_mark_unwatched",
+            json!({ "type": "movie", "id": "tt1", "videos": ["tt1"] }),
+        );
+        assert_eq!(state, json!({ "inWatchlist": false, "progress": [] }));
+        assert_eq!(call("library_watched_titles", json!({})), json!([]));
+    }
+
+    #[test]
     fn library_commands_validate_their_arguments() {
         let app = TestApp::new("library-invalid");
         let invalid = [
@@ -736,6 +831,33 @@ mod tests {
                 }}),
             ),
             ("library_title_state", json!({ "type": "movie", "id": "" })),
+            (
+                "library_continue_dismiss",
+                json!({ "type": "a/b", "id": "tt1" }),
+            ),
+            ("library_continue_restore", json!({ "type": "movie" })),
+            (
+                "library_mark_watched",
+                json!({ "title": { "type": "movie", "id": "tt1", "name": "M" }, "videos": [] }),
+            ),
+            (
+                "library_mark_watched",
+                json!({ "title": { "type": "movie", "id": "tt1", "name": "M" },
+                        "videos": [{ "id": "tt1" }, { "id": "tt1" }] }),
+            ),
+            (
+                "library_mark_watched",
+                json!({ "title": { "type": "movie", "id": "tt1", "name": " " },
+                        "videos": [{ "id": "tt1" }] }),
+            ),
+            (
+                "library_mark_unwatched",
+                json!({ "type": "movie", "id": "tt1", "videos": [""] }),
+            ),
+            (
+                "library_mark_unwatched",
+                json!({ "type": "movie", "id": "tt1", "videos": "tt1" }),
+            ),
         ];
         for (cmd, args) in invalid {
             let error = app.invoke(cmd, args).unwrap_err();
@@ -752,6 +874,12 @@ mod tests {
             .deserialize()
             .unwrap();
         assert_eq!(watchlist, json!([]));
+        let history: Value = app
+            .invoke("library_history", json!({}))
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert_eq!(history, json!([]));
     }
 
     #[test]

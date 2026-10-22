@@ -162,6 +162,12 @@ export interface TitleLibraryState {
   progress: HistoryEntry[];
 }
 
+/** A title without its display data (`library::TitleRef`). */
+export interface TitleRef {
+  type: string;
+  id: string;
+}
+
 /** A progress report (`library::PlaybackProgress`). */
 export interface PlaybackProgress {
   title: LibraryTitle;
@@ -181,9 +187,29 @@ export const libraryCommands = {
     invoke<HistoryEntry>('library_record_progress', { progress }),
   /** Recently watched titles (the latest video of each), newest first. */
   history: (limit?: number) => invoke<HistoryTitle[]>('library_history', { limit }),
-  /** Titles with unfinished progress, newest first. */
+  /**
+   * Titles to carry on with (unfinished, or a series between episodes),
+   * newest first, without those taken off the list.
+   */
   continueWatching: (limit?: number) =>
     invoke<HistoryEntry[]>('library_continue_watching', { limit }),
+  /** Takes a title off Continue watching until it is played again; history is kept. */
+  dismissFromContinue: (type: string, id: string) =>
+    invoke<void>('library_continue_dismiss', { type, id }),
+  /** Undoes `dismissFromContinue`. */
+  restoreToContinue: (type: string, id: string) =>
+    invoke<void>('library_continue_restore', { type, id }),
+  /**
+   * Marks a film (its own video) or episodes, in the order watched, as
+   * watched. At most 5,000, each once. Returns the title's state.
+   */
+  markWatched: (title: LibraryTitle, videos: LibraryVideo[]) =>
+    invoke<TitleLibraryState>('library_mark_watched', { title, videos }),
+  /** Forgets the progress of videos of a title. Returns the title's state. */
+  markUnwatched: (type: string, id: string, videos: string[]) =>
+    invoke<TitleLibraryState>('library_mark_unwatched', { type, id, videos }),
+  /** Finished films, for the watched tick on posters. */
+  watchedTitles: () => invoke<TitleRef[]>('library_watched_titles'),
   titleState: (type: string, id: string) =>
     invoke<TitleLibraryState>('library_title_state', { type, id }),
   removeFromHistory: (type: string, id: string) =>
