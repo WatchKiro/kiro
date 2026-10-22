@@ -403,17 +403,34 @@ impl Worker {
     }
 
     /// Opens `source` (from `start` seconds, if given: its first keyframe is
-    /// then one wanted) through the bounded reader, or, if the host doesn't
-    /// serve ranges, with mpv's own reading.
+    /// then one wanted) through the bounded reader, or with mpv's own
+    /// reading when that fails or the stream is an HLS playlist (of a master
+    /// playlist, only its lowest variant). A host that doesn't serve ranges
+    /// isn't previewed at all.
     fn open(&self, source: &str, start: Option<f64>) -> Result<Core, Failure> {
         // Debug builds: `KIRO_PREVIEW_READER=mpv` skips the bounded reader,
         // to compare what each downloads.
         let bounded = !(cfg!(debug_assertions)
             && std::env::var("KIRO_PREVIEW_READER").as_deref() == Ok("mpv"));
+        let mut target = source.to_owned();
         if bounded {
-            match self.open_with(source, true, start) {
+            match self.open_with(source, Reading::Bounded, start) {
                 Ok(core) => return Ok(core),
                 Err(error @ (Failure::Stopped | Failure::NoRanges)) => return Err(error),
+                Err(Failure::Playlist(variant)) => {
+                    if debug_log_enabled() {
+                        player_log!(
+                            "[kiro-preview] an HLS playlist: mpv reads {}",
+                            variant.as_deref().map_or("it".into(), |variant| format!(
+                                "its lowest variant, {}",
+                                redacted_url(variant)
+                            ))
+                        );
+                    }
+                    if let Some(variant) = variant {
+                        target = variant;
+                    }
+                }
                 Err(error) => {
                     player_log!(
                         "[kiro-preview] bounded reads failed ({error}): mpv reads the stream"
@@ -421,36 +438,50 @@ impl Worker {
                 }
             }
         }
-        self.open_with(source, false, start)
+        self.open_with(source, Reading::Mpv(&target), start)
     }
 
-    fn open_with(&self, source: &str, bounded: bool, start: Option<f64>) -> Result<Core, Failure> {
+    fn open_with(
+        &self,
+        source: &str,
+        reading: Reading,
+        start: Option<f64>,
+    ) -> Result<Core, Failure> {
+        let bounded = matches!(reading, Reading::Bounded);
+        // The reader context is made before the core, so that on every
+        // return (a failed opening too) the core is freed first: until it
+        // is, mpv may still open streams through the reader on its own
+        // threads (an HLS playlist's entries, on its way out), and those
+        // use the context.
+        let reader = if bounded {
+            Some(ReaderContext::new(self.opening.clone()).map_err(|_| Failure::Reader)?)
+        } else {
+            None
+        };
         let mpv = create_core()?;
         if let Some(start) = start {
             mpv.set_property("start", format!("{start:.3}").as_str())?;
         }
-        let reader = if bounded {
-            let context = ReaderContext::new(self.opening.clone()).map_err(|_| Failure::Reader)?;
-            preview_reader::register(&mpv, &context)?;
-            Some(context)
-        } else {
-            None
-        };
-        let target = if bounded {
-            preview_reader::wrap(source)
-        } else {
-            source.to_owned()
+        if let Some(context) = &reader {
+            preview_reader::register(&mpv, context)?;
+        }
+        let target = match reading {
+            Reading::Bounded => preview_reader::wrap(source),
+            Reading::Mpv(target) => target.to_owned(),
         };
         mpv.command("loadfile", &[&target, "replace"])?;
         let opened = wait_for(&mpv, OPEN_TIMEOUT, &self.shared.stop, |event| {
             matches!(event, Event::PlaybackRestart)
         });
         if opened.is_err()
-            && reader
-                .as_ref()
-                .is_some_and(|reader| reader.ranges_refused())
+            && let Some(reader) = &reader
         {
-            return Err(Failure::NoRanges);
+            if reader.playlist() {
+                return Err(Failure::Playlist(reader.variant().map(String::from)));
+            }
+            if reader.ranges_refused() {
+                return Err(Failure::NoRanges);
+            }
         }
         opened?;
         if let Some(reader) = &reader {
@@ -493,6 +524,15 @@ impl Worker {
     }
 }
 
+/// How the preview core reads a stream.
+enum Reading<'a> {
+    /// Through the bounded reader (`preview_reader.rs`).
+    Bounded,
+    /// mpv reads this URL itself: the stream, or the HLS variant previews
+    /// are made from.
+    Mpv(&'a str),
+}
+
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -516,6 +556,9 @@ enum Failure {
     /// The host doesn't serve ranges, so previews would read the stream
     /// from the start.
     NoRanges,
+    /// The stream is an HLS playlist, which the bounded reader leaves to
+    /// mpv: with the variant to read, of a master playlist.
+    Playlist(Option<String>),
 }
 
 impl std::fmt::Display for Failure {
@@ -528,6 +571,7 @@ impl std::fmt::Display for Failure {
             Self::Io(error) => write!(f, "{error}"),
             Self::Reader => f.write_str("no HTTP client"),
             Self::NoRanges => f.write_str("the host doesn't serve ranges"),
+            Self::Playlist(_) => f.write_str("an HLS playlist"),
         }
     }
 }
@@ -572,6 +616,9 @@ fn create_core() -> client::Result<Mpv> {
         init.set_option("demuxer-readahead-secs", 0.0_f64)?;
         init.set_option("demuxer-max-bytes", "64KiB")?;
         init.set_option("demuxer-max-back-bytes", 0_i64)?;
+        // HLS: the variant with the lowest bitrate, whose segments cost the
+        // least to read; a 320-pixel frame needs no more.
+        init.set_option("hls-bitrate", "min")?;
         let scale = format!("scale={PREVIEW_WIDTH}:-2");
         init.set_option("vf", scale.as_str())?;
         init.set_option("screenshot-format", "jpg")?;
@@ -862,6 +909,18 @@ mod tests {
     /// ffmpeg's `testsrc2`; see testdata/README.md).
     const FIXTURE: &[u8] = include_bytes!("testdata/seekable.mkv");
 
+    /// An HLS rendition of [`FIXTURE`]: a master playlist naming one media
+    /// playlist of five 2 s MPEG-TS segments (see testdata/README.md).
+    const HLS_FIXTURE: &[(&str, &[u8])] = &[
+        ("master.m3u8", include_bytes!("testdata/hls/master.m3u8")),
+        ("media.m3u8", include_bytes!("testdata/hls/media.m3u8")),
+        ("seg0.ts", include_bytes!("testdata/hls/seg0.ts")),
+        ("seg1.ts", include_bytes!("testdata/hls/seg1.ts")),
+        ("seg2.ts", include_bytes!("testdata/hls/seg2.ts")),
+        ("seg3.ts", include_bytes!("testdata/hls/seg3.ts")),
+        ("seg4.ts", include_bytes!("testdata/hls/seg4.ts")),
+    ];
+
     /// Serves `body` over http on a loopback port, as a stream host would:
     /// honouring range requests, or (`ranges: false`) always sending all of
     /// it. Returns the URL and the bytes sent so far.
@@ -869,19 +928,49 @@ mod tests {
         body: &'static [u8],
         ranges: bool,
     ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let (base, sent, _) = serve_files(vec![("seekable.mkv", body)], ranges);
+        (format!("{base}seekable.mkv"), sent)
+    }
+
+    /// Serves `files` by name, as [`serve_with`] serves one (anything else
+    /// is not found). Returns the URL of the folder they are in, the bytes
+    /// sent so far and the names asked for.
+    fn serve_files(
+        files: Vec<(&'static str, &'static [u8])>,
+        ranges: bool,
+    ) -> (
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
         use std::io::{BufRead, BufReader, Write};
+        // Shared by every connection, for as long as the test runs.
+        let files: &'static [(&str, &[u8])] = files.leak();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = sent.clone();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let names = asked.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
                 let counter = counter.clone();
+                let names = names.clone();
                 std::thread::spawn(move || {
                     let mut reader = BufReader::new(stream.try_clone().unwrap());
                     let mut range: Option<(usize, Option<usize>)> = None;
                     let mut line = String::new();
+                    let _ = reader.read_line(&mut line);
+                    // `GET /<name> HTTP/1.1`
+                    let name = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|path| path.strip_prefix('/'))
+                        .unwrap_or_default()
+                        .to_owned();
+                    names.lock().unwrap().push(name.clone());
+                    line.clear();
                     while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
                         if let Some(value) = line
                             .to_ascii_lowercase()
@@ -893,6 +982,17 @@ mod tests {
                         }
                         line.clear();
                     }
+                    let Some(&(_, body)) = files.iter().find(|(file, _)| *file == name) else {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                        return;
+                    };
+                    let kind = match name.rsplit_once('.').map(|(_, extension)| extension) {
+                        Some("m3u8") => "application/vnd.apple.mpegurl",
+                        Some("ts") => "video/mp2t",
+                        _ => "video/x-matroska",
+                    };
                     let last = body.len() - 1;
                     let (head, start, end) = match range.filter(|_| ranges) {
                         Some((from, to)) => {
@@ -906,7 +1006,7 @@ mod tests {
                         None => ("HTTP/1.1 200 OK\r\n".to_owned(), 0, last),
                     };
                     let head = format!(
-                        "{head}Content-Type: video/x-matroska\r\nAccept-Ranges: {}\r\n\
+                        "{head}Content-Type: {kind}\r\nAccept-Ranges: {}\r\n\
                          Content-Length: {}\r\nConnection: close\r\n\r\n",
                         if ranges { "bytes" } else { "none" },
                         end - start + 1
@@ -919,7 +1019,7 @@ mod tests {
                 });
             }
         });
-        (format!("http://127.0.0.1:{port}/seekable.mkv"), sent)
+        (format!("http://127.0.0.1:{port}/"), sent, asked)
     }
 
     fn serve(body: &'static [u8]) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
@@ -1063,6 +1163,55 @@ mod tests {
             frame(previewer.request(position));
         }
         assert_eq!(hits.load(Ordering::Relaxed), after_open);
+    }
+
+    #[test]
+    fn previews_an_hls_stream() {
+        let (base, _, requested) = serve_files(HLS_FIXTURE.to_vec(), true);
+        let previewer = Previewer::new().unwrap();
+        previewer.set_source(Some(format!("{base}master.m3u8")));
+        for (asked, keyframe) in [(5.0, 4.0), (9.5, 8.0), (1.0, 0.0)] {
+            let frame = frame(previewer.request(asked));
+            assert!(
+                (frame.position - keyframe).abs() < 0.2,
+                "asked {asked}: got {}",
+                frame.position
+            );
+            assert_eq!(&frame.jpeg[..2], &[0xFF, 0xD8], "a JPEG");
+        }
+        // Of the master playlist's variants, only the lowest with video was
+        // read: not the 1080p one, nor the audio-only one.
+        let requested = requested.lock().unwrap();
+        assert!(
+            requested.iter().any(|name| name == "media.m3u8"),
+            "{requested:?}"
+        );
+        assert!(
+            !requested.iter().any(|name| name.starts_with("missing/")),
+            "{requested:?}"
+        );
+    }
+
+    /// A plain list of files ends the opening at once (mpv goes on to its
+    /// entries, which the player follows, not the preview core), and mpv
+    /// opens the next entry through the reader while that core is freed.
+    /// The reader's context must outlive it: this once crashed or hung the
+    /// app, with HLS.
+    #[test]
+    fn a_list_of_files_is_given_up_on_safely() {
+        let (base, _, _) = serve_files(
+            vec![
+                ("list.m3u", b"seekable.mkv\nseekable.mkv\n".as_slice()),
+                ("seekable.mkv", FIXTURE),
+            ],
+            true,
+        );
+        let previewer = Previewer::new().unwrap();
+        previewer.set_source(Some(format!("{base}list.m3u")));
+        assert_eq!(previewer.request(5.0), Outcome::Unavailable);
+        // The previewer still works, for the next stream.
+        previewer.set_source(Some(format!("{base}seekable.mkv")));
+        assert!((frame(previewer.request(5.0)).position - 4.0).abs() < 0.2);
     }
 
     #[test]
