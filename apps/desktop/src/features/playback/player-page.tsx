@@ -665,7 +665,7 @@ function PlaybackSession({
   }, [skipShown]);
   /** Where cards over the video sit: above the controls, or low when they're hidden. */
   const cornerClass = cx(
-    'absolute right-8 z-10 transition-[bottom] duration-500',
+    'absolute right-8 z-10 transition-[bottom] duration-500 tv:right-12',
     hidden ? 'bottom-8' : 'bottom-36',
   );
 
@@ -711,7 +711,7 @@ function PlaybackSession({
       <div
         data-nav-skip={hidden || undefined}
         className={cx(
-          'absolute inset-x-0 top-0 flex items-center gap-4 bg-linear-to-b from-black/75 via-black/30 to-transparent px-6 pt-5 pb-16 transition-opacity duration-500',
+          'absolute inset-x-0 top-0 flex items-center gap-4 bg-linear-to-b from-black/75 via-black/30 to-transparent px-6 pt-5 pb-16 transition-opacity duration-500 tv:px-12 tv:pt-7',
           hidden && 'pointer-events-none opacity-0',
         )}
       >
@@ -1010,7 +1010,7 @@ function ControlsBar({
     <div
       data-nav-skip={hidden || undefined}
       className={cx(
-        'absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 via-black/45 to-transparent px-8 pt-24 pb-6 transition-opacity duration-500',
+        'absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 via-black/45 to-transparent px-8 pt-24 pb-6 transition-opacity duration-500 tv:px-12 tv:pb-7',
         hidden && 'pointer-events-none opacity-0',
       )}
     >

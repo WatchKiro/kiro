@@ -10,8 +10,8 @@ import { useSetupStore } from '@/features/onboarding/setup-store';
 import { activeProfile } from '@/features/profiles/profiles-data';
 import { useProfilesStore } from '@/features/profiles/profiles-store';
 import { isTextField, keyAction } from '@/features/remote/keys';
-import { IS_ANDROID } from '@/features/remote/android-back';
 import { focusWithKeys } from '@/features/remote/remote-navigation';
+import { IS_ANDROID } from '@/lib/platform';
 import { isNativeRuntime } from '@/services/native';
 
 /**
@@ -97,7 +97,7 @@ function FirstRunSetup({ atLaunch }: { atLaunch: boolean }) {
       aria-modal="true"
       aria-labelledby={headingId}
       data-nav-layer
-      className="fixed inset-0 z-40 flex flex-col overflow-y-auto bg-ink-950 text-ink-100"
+      className="fixed inset-0 z-40 flex flex-col overflow-y-auto bg-ink-950 text-ink-100 tv:px-12 tv:py-7"
     >
       <div
         aria-hidden

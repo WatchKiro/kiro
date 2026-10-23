@@ -1,7 +1,6 @@
 import { exit, onBackButtonPress } from '@tauri-apps/api/app';
 
-/** Set by the Tauri CLI for the renderer it builds (`android`, `macos`, ...). */
-export const IS_ANDROID = import.meta.env.TAURI_ENV_PLATFORM === 'android';
+import { IS_ANDROID } from '@/lib/platform';
 
 /**
  * Android TV: the remote's Back button doesn't reach the page as a key, and

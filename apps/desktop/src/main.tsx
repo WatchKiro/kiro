@@ -11,6 +11,7 @@ import { installAndroidBack } from '@/features/remote/android-back';
 import { installTvTextFields } from '@/features/remote/android-text-fields';
 import { installRemoteNavigation } from '@/features/remote/remote-navigation';
 import { ShortcutsHelp } from '@/features/remote/shortcuts-help';
+import { IS_ANDROID } from '@/lib/platform';
 
 import '@/styles/globals.css';
 
@@ -21,6 +22,8 @@ async function start() {
     const { installPreviewBackend } = await import('@/dev/preview-backend');
     installPreviewBackend();
   }
+
+  if (IS_ANDROID) document.documentElement.dataset.tv = '';
 
   const container = document.getElementById('root');
   if (!container) throw new Error('Kiro: #root element missing from index.html');

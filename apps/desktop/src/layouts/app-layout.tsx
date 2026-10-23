@@ -71,7 +71,11 @@ function Shell({ covered }: { covered: boolean }) {
   }, [pathname, search, navigationType]);
 
   return (
-    <div inert={covered} className="flex h-dvh overflow-hidden bg-ink-950 text-ink-100">
+    <div
+      inert={covered}
+      // A TV keeps content inside overscan margins: 5% of 960×540.
+      className="flex h-dvh overflow-hidden bg-ink-950 text-ink-100 tv:px-12 tv:py-7"
+    >
       <Sidebar />
       <main
         ref={mainRef}

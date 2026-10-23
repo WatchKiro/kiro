@@ -256,11 +256,35 @@ Smoothness on cheap boxes is a requirement, so the first optimisation pass was m
 
 A second round ran after about 30 minutes of reloads. By then the emulator had slowed to 2–3 fps for both builds, as its memory swapped, so that round isn't comparable. The optimised build was ahead in it too.
 
-**Still to do** (in the TV UI pass):
+### TV UI pass
 
-- **The player page:** it re-renders as a whole on each time update. Moving the clock and seek bar into components of their own would cut playback JavaScript again.
+Measured the same way, comparing work counts, which don't depend on the Mac's load.
+
+- **Player.** The controls bar isn't re-rendered while it stays hidden, which is most of a film. While a video plays with the controls hidden, the page's DOM changes went from about 27 a second to none, and its main thread spent 10 ms a second (from 70–110). Paused, it works only while the buffer is still filling: about 60 ms a second for its updates. Once the buffer is full, it does nothing.
+- **A bug fixed on the way.** The first key pressed with the controls hidden did nothing: the first Space, arrow or Play/Pause. That was on every platform. The key woke the controls, React re-rendered between two listeners, and the player's own listener was swapped out mid-dispatch. The player's key listeners are now added once (`useEffectEvent`), so they no longer churn twice a second either.
+- **Hold OK for a card's menu.** See [docs/keyboard-and-remote.md](../keyboard-and-remote.md#android-tv). Checked on the emulator:
+  - held OK opened "Mark as watched", with focus on it and without pressing it;
+  - Back closed the menu;
+  - a short OK opened the title.
+- **960×540 and overscan.** The `tv:` variant (`data-tv` on the root), used in a few places:
+  - overscan margins of 48 by 28 px around the app, the player's bars and first run;
+  - the sidebar collapsed by default (68 px);
+  - a 62vh hero on Discover, with a smaller logo, a one-line synopsis and tighter spacing, so the first row shows;
+  - the title page's hero growing to fit its details;
+  - no "Ctrl K" hint.
+
+  Discover, Movies, Library, Settings, Addons, a title page and the player were checked in screenshots. Style work per press didn't change: about 69 elements restyled either way.
+
+- **Desktop.** One visible change: "Customise" on Discover sits above the first row, where it used to share that row heading's line and overlap its "See all". Checked at 1280×800 and 960×600. The `tv:` classes don't apply on desktop.
+
+Timings from this round aren't usable. With the Mac's load between 6 and 11, the emulator ran both builds at 3–4 fps, and then froze. The work counts above are the evidence.
+
+**Still to do:**
+
+- **The player page:** it still re-renders as a whole on each time update, though the hidden controls no longer do. Moving the clock and up-next timing into components of their own would cut what's left (10–40 ms a second while playing, more while buffering).
 - **The key handler:** at 6× throttling it still takes tens of milliseconds, mostly forced style and layout as it reads geometry after changing focus.
-- **Real devices:** every number here needs checking on a real box.
+- **Settings on Android:** it still shows desktop-only sections (Updates, Discord).
+- **Real devices:** every number here needs checking on a real box, ideally on a quiet machine or a device.
 
 ## Risks
 

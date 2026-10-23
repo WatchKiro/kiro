@@ -111,7 +111,7 @@ export function DiscoverPage() {
         <div className="h-40" />
       )}
       {/* Rows rise into the hero's fade. */}
-      <div className="relative z-10 -mt-24 space-y-11 px-10">
+      <div className="relative z-10 -mt-24 space-y-11 px-10 tv:-mt-10">
         <RowsToolbar layout={layout} onCustomise={() => setEditing(true)} />
         <ContinueWatching />
         {shown.map(({ key, source }) => (
@@ -153,7 +153,8 @@ const feedKeyOf = (source: BrowseSource) => feedKey(source, effectiveGenre(sourc
 function RowsToolbar({ layout, onCustomise }: { layout: RowLayout; onCustomise: () => void }) {
   const added = newRowAddons(layout.rows);
   return (
-    <div className="-mb-7 flex items-center justify-end gap-3">
+    // Above the first row, not on its heading's line, where "See all" is.
+    <div className="absolute -top-11 right-10 flex items-center justify-end gap-3">
       {added.length > 0 && (
         <div
           role="status"

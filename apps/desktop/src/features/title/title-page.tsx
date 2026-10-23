@@ -483,8 +483,13 @@ function Hero({
   const year = releaseYear(meta.releaseInfo) ?? releaseYear(meta.released);
 
   return (
-    <HeroBackdrop src={displayableImage(meta.background)}>
-      <div className="w-full px-10 pb-20">
+    // On a TV the details don't fit a hero low enough for the page below:
+    // the hero grows with them, starting under the header.
+    <HeroBackdrop
+      src={displayableImage(meta.background)}
+      className="tv:h-auto tv:min-h-[62vh] tv:pt-20"
+    >
+      <div className="w-full px-10 pb-20 tv:pb-14">
         <TitleLogo as="h1" name={meta.name} logo={meta.logo} />
         <div className="mt-6">
           <MetaLine
@@ -495,7 +500,7 @@ function Hero({
         {meta.description && (
           <p
             title={meta.description}
-            className="mt-3.5 line-clamp-4 max-w-2xl text-[15px] leading-relaxed text-ink-200"
+            className="mt-3.5 line-clamp-4 max-w-2xl text-[15px] leading-relaxed text-ink-200 tv:line-clamp-2"
           >
             {meta.description}
           </p>

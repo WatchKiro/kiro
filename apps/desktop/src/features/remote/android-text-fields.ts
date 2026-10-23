@@ -1,5 +1,5 @@
-import { IS_ANDROID } from '@/features/remote/android-back';
 import { isTextField } from '@/features/remote/keys';
+import { IS_ANDROID } from '@/lib/platform';
 
 /** Marks a field made read-only here, so only those are given back. */
 const LOCKED = 'data-tv-locked';

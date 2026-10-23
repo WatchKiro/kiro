@@ -1,10 +1,10 @@
 import { NavigationType } from 'react-router';
 
 import type { router as appRouter } from '@/app/router';
-import { IS_ANDROID } from '@/features/remote/android-back';
 import { isTextField, keyAction, ownsArrow } from '@/features/remote/keys';
 import { useShortcutsHelpStore } from '@/features/remote/shortcuts-store';
 import { FocusMemory, chooseMove, type Direction, type NavItem } from '@/features/remote/spatial';
+import { IS_ANDROID } from '@/lib/platform';
 
 /**
  * Keyboard and remote-control navigation for the whole app: arrows move focus

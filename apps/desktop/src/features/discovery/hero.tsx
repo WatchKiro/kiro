@@ -1,5 +1,6 @@
 import type { MetaPreview } from '@kiro/addon-sdk';
 import { buttonVariants } from '@kiro/ui';
+import { cx } from '@kiro/utils';
 import { Info, Play, Star } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -9,16 +10,26 @@ import { WatchlistButton } from '@/features/library/watchlist-button';
 import { releaseYear, titlePath } from '@/features/title/title-data';
 
 /** Height of the artwork; content below starts inside its fade. */
-export const HERO_HEIGHT = 'h-[clamp(30rem,72vh,44rem)]';
+// On a TV, low enough for the first row to show beneath it.
+export const HERO_HEIGHT = 'h-[clamp(30rem,72vh,44rem)] tv:h-[62vh]';
 
 /**
  * Full-bleed artwork for one title, under the floating header. The text sits
  * bottom-left over a fade into the page, so rows below can rise into it.
  */
-export function HeroBackdrop({ src, children }: { src: string | undefined; children: ReactNode }) {
+export function HeroBackdrop({
+  src,
+  children,
+  className,
+}: {
+  src: string | undefined;
+  children: ReactNode;
+  /** e.g. a height of its own on a TV (`tv:` classes). */
+  className?: string;
+}) {
   const [failed, setFailed] = useState(false);
   return (
-    <section className={`relative isolate flex items-end ${HERO_HEIGHT}`}>
+    <section className={cx('relative isolate flex items-end', HERO_HEIGHT, className)}>
       <div aria-hidden className="absolute inset-0 -z-10 overflow-hidden bg-ink-900">
         {src && !failed ? (
           <img
@@ -64,7 +75,7 @@ export function TitleLogo({
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
-          className="max-h-32 max-w-[min(28rem,80%)] object-contain object-left drop-shadow-[0_8px_30px_rgb(0_0_0/0.6)]"
+          className="max-h-32 max-w-[min(28rem,80%)] object-contain object-left drop-shadow-[0_8px_30px_rgb(0_0_0/0.6)] tv:max-h-16"
         />
       ) : (
         <span className="block max-w-2xl text-5xl leading-[1.05] font-semibold tracking-[-0.035em] text-balance text-ink-50">
@@ -110,9 +121,10 @@ export function FeaturedHero({ item }: { item: MetaPreview }) {
   const path = titlePath(item.type, item.id);
   return (
     <HeroBackdrop src={displayableImage(item.background)}>
-      <div className="w-full px-10 pb-36">
+      {/* On a TV: shorter, to stay clear of the header above and the rows below. */}
+      <div className="w-full px-10 pb-36 tv:pb-16">
         <TitleLogo name={item.name} logo={item.logo} />
-        <div className="mt-6">
+        <div className="mt-6 tv:mt-3">
           <MetaLine
             rating={item.imdbRating}
             facts={[
@@ -123,11 +135,11 @@ export function FeaturedHero({ item }: { item: MetaPreview }) {
           />
         </div>
         {item.description && (
-          <p className="mt-3.5 line-clamp-3 max-w-xl text-[15px] leading-relaxed text-ink-200">
+          <p className="mt-3.5 line-clamp-3 max-w-xl text-[15px] leading-relaxed text-ink-200 tv:mt-2 tv:line-clamp-1">
             {item.description}
           </p>
         )}
-        <div data-nav-group className="mt-6 flex items-center gap-3">
+        <div data-nav-group className="mt-6 flex items-center gap-3 tv:mt-4">
           <Link to={`${path}#streams`} data-nav-start className={buttonVariants({ size: 'lg' })}>
             <Play aria-hidden className="size-4.5 fill-current" />
             Play
