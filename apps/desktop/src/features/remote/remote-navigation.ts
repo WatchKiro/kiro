@@ -274,11 +274,14 @@ function openMenu(active: HTMLElement | null): boolean {
   );
 }
 
-function goBack(router: Router) {
+/** Returns false on the home page, with nothing to go back to. */
+function goBack(router: Router): boolean {
   const { location } = router.state;
   // `default` is the first entry of this session: nothing to go back to.
   if (location.key !== 'default') void router.navigate(-1);
   else if (location.pathname !== '/') void router.navigate('/');
+  else return false;
+  return true;
 }
 
 function onKeyDown(router: Router, event: KeyboardEvent) {
@@ -319,8 +322,7 @@ function onKeyDown(router: Router, event: KeyboardEvent) {
       // dialog, a widget or page with its own Back.
       if (isTextField(field) || topLayer() || keys.includes('back')) return;
       if (field?.closest('[data-nav-own~="back"]')) return;
-      goBack(router);
-      handled = true;
+      handled = goBack(router);
       break;
     case 'menu':
       handled = openMenu(field);

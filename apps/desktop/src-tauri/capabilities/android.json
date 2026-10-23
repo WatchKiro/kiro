@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "android",
+  "description": "Android TV: the remote's Back button reaches the renderer (Kiro's own Back: close a menu, leave a page), and Back on the home page leaves the app.",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": [
+    "core:app:allow-register-listener",
+    "core:app:allow-remove-listener",
+    "core:app:allow-exit"
+  ]
+}

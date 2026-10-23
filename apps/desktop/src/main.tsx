@@ -7,6 +7,7 @@ import { router } from '@/app/router';
 import { SmokeTestStart } from '@/app/smoke-test';
 import { hideSplash } from '@/app/splash';
 import { SplashHandoff } from '@/app/splash-handoff';
+import { installAndroidBack } from '@/features/remote/android-back';
 import { installRemoteNavigation } from '@/features/remote/remote-navigation';
 import { ShortcutsHelp } from '@/features/remote/shortcuts-help';
 
@@ -25,6 +26,7 @@ async function start() {
 
   // Arrows, Enter and Back from a keyboard or remote, on every page.
   installRemoteNavigation(router);
+  installAndroidBack();
 
   createRoot(container).render(
     <StrictMode>

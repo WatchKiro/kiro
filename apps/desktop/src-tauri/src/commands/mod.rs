@@ -15,6 +15,9 @@ pub mod app;
 pub mod library;
 #[cfg(native_player)]
 pub mod player;
+#[cfg(target_os = "android")]
+#[path = "player_android.rs"]
+pub mod player;
 pub mod profiles;
 pub mod settings;
 pub mod skip_times;
