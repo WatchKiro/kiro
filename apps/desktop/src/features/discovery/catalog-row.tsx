@@ -54,7 +54,9 @@ export function CatalogRow({ source, title, seeAll }: CatalogRowProps) {
       ) : feed?.status === 'ready' ? (
         <p className="text-sm text-ink-400">This catalogue is empty.</p>
       ) : (
-        <PosterRowSkeleton />
+        // Rows further down wait still: an animation, even off screen, is
+        // restyled on every frame the page draws (slow on a TV).
+        <PosterRowSkeleton pulse={near} />
       )}
     </section>
   );

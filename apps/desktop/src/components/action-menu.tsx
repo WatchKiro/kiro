@@ -117,7 +117,7 @@ export function CardMenu({
           setOpen(fromButton(event.currentTarget, keyFocused(event.currentTarget)))
         }
         className={cx(
-          'absolute z-10 flex size-8 cursor-pointer items-center justify-center rounded-full bg-black/70 text-ink-100 opacity-0 backdrop-blur transition group-focus-within/menu:opacity-100 group-hover/menu:opacity-100 hover:bg-black/85 hover:text-ink-50 focus-visible:opacity-100 focus-visible:focus-ring',
+          'absolute z-10 flex size-8 cursor-pointer items-center justify-center rounded-full bg-black/70 text-ink-100 opacity-0 transition group-focus-within/menu:opacity-100 group-hover/menu:opacity-100 hover:bg-black/85 hover:text-ink-50 focus-visible:opacity-100 focus-visible:focus-ring',
           open && 'opacity-100',
           buttonClassName ?? 'top-2 right-2',
         )}

@@ -156,10 +156,12 @@ export function ScrollRow({ children }: { children: ReactNode }) {
   const measure = useCallback(() => {
     const list = ref.current;
     if (!list) return;
-    setEdges({
-      start: list.scrollLeft <= 1,
-      end: list.scrollLeft + list.clientWidth >= list.scrollWidth - 1,
-    });
+    const start = list.scrollLeft <= 1;
+    const end = list.scrollLeft + list.clientWidth >= list.scrollWidth - 1;
+    // Runs on every scroll frame: re-render only when an end is reached or left.
+    setEdges((current) =>
+      current.start === start && current.end === end ? current : { start, end },
+    );
   }, []);
 
   useEffect(() => {
@@ -222,13 +224,21 @@ function RowArrow({
   );
 }
 
-/** Placeholder row shown while a catalogue loads. */
-export function PosterRowSkeleton({ count = 9 }: { count?: number }) {
+/** Placeholder row shown while a catalogue loads; `pulse: false` keeps it still. */
+export function PosterRowSkeleton({
+  count = 9,
+  pulse = true,
+}: {
+  count?: number;
+  pulse?: boolean;
+}) {
   return (
     <ul aria-hidden className="-mx-10 flex gap-5 overflow-hidden px-10 pt-1 pb-3">
       {Array.from({ length: count }, (_, index) => (
         <li key={index} className="w-[9.5rem] shrink-0">
-          <div className="aspect-[2/3] animate-pulse rounded-xl bg-white/[0.04]" />
+          <div
+            className={cx('aspect-[2/3] rounded-xl bg-white/[0.04]', pulse && 'animate-pulse')}
+          />
           <div className="mt-2.5 h-3 w-3/4 rounded-full bg-white/[0.04]" />
         </li>
       ))}

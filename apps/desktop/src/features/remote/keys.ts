@@ -103,6 +103,8 @@ export interface FieldLike {
   selectionStart?: number | null;
   selectionEnd?: number | null;
   value?: string;
+  /** A read-only text field takes no typing, so its arrows navigate. */
+  readOnly?: boolean;
 }
 
 /** Input types that take no text, so keys pressed on them can navigate. */
@@ -146,7 +148,7 @@ export function ownsArrow(
   const type = (element.type ?? 'text').toLowerCase();
   const sideways = direction === 'left' || direction === 'right';
   if (type === 'range') return sideways;
-  if (!isTextField(element) || !sideways) return false;
+  if (!isTextField(element) || !sideways || element.readOnly) return false;
   const { selectionStart: start, selectionEnd: end, value = '' } = element;
   if (repeat || start == null || start !== end) return true;
   return direction === 'left' ? start > 0 : start < value.length;

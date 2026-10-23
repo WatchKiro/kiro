@@ -63,8 +63,9 @@ function reducedMotion() {
  * in); controls faded out of the way are marked `data-nav-skip` instead.
  */
 function isShown(element: HTMLElement) {
-  if (element.getClientRects().length === 0) return false;
-  return element.checkVisibility?.({ visibilityProperty: true }) ?? true;
+  // `checkVisibility` is also false without a box (`display: none`).
+  if (element.checkVisibility) return element.checkVisibility({ visibilityProperty: true });
+  return element.getClientRects().length > 0;
 }
 
 /** Whether arrows can move focus to `element`. */
@@ -374,14 +375,24 @@ function identityOf(element: HTMLElement) {
   );
 }
 
+/**
+ * The navigable items with `identity`, in document order. Compares the
+ * identity first: it runs on every focus change, and checking every item's
+ * box would lay out the page each time (slow on a TV's CPU).
+ */
+function navigablesWith(identity: string): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>(FOCUSABLE)]
+    .filter((element) => identityOf(element) === identity)
+    .filter(isNavigable);
+}
+
 function describe(element: HTMLElement): FocusSnapshot {
   const identity = identityOf(element);
-  const same = navigables(document).filter((other) => identityOf(other) === identity);
-  return { identity, ordinal: Math.max(0, same.indexOf(element)) };
+  return { identity, ordinal: Math.max(0, navigablesWith(identity).indexOf(element)) };
 }
 
 function find(snapshot: FocusSnapshot): HTMLElement | undefined {
-  const same = navigables(document).filter((element) => identityOf(element) === snapshot.identity);
+  const same = navigablesWith(snapshot.identity);
   return same[snapshot.ordinal] ?? same[0];
 }
 

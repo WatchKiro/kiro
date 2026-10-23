@@ -77,6 +77,9 @@ class TrackArgs {
  *
  * Events go to the renderer's channel shaped like `media::model::PlayerEvent`.
  */
+/** How often the time is sent while playing. */
+private const val TICK_MS = 500L
+
 @TauriPlugin
 class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
   private var webView: WebView? = null
@@ -89,11 +92,15 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
   private var volume = 1f
   private var muted = false
   private var lastBufferedSent = 0L
+  private var lastBufferedStart = -1L
+  private var lastBufferedEnd = -1L
+  private var lastPosition = -1L
+  private var lastDuration = -1L
   private val main = Handler(Looper.getMainLooper())
   private val ticker = object : Runnable {
     override fun run() {
       tick()
-      main.postDelayed(this, 250)
+      main.postDelayed(this, TICK_MS)
     }
   }
 
@@ -127,6 +134,10 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
     onMain {
       val player = player ?: return@onMain invoke.reject("The player is not ready", "PLAYER_NOT_ATTACHED")
       loaded = true
+      lastPosition = -1
+      lastDuration = -1
+      lastBufferedStart = -1
+      lastBufferedEnd = -1
       emitState("loading")
       player.setMediaItem(MediaItem.fromUri(args.url), ((args.startPosition ?: 0.0) * 1000).toLong())
       player.playWhenReady = true
@@ -297,6 +308,7 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
           if (seeking) {
             seeking = false
             emit("seekingChange", JSObject().put("seeking", false))
+            sendTime(player, force = true)
           }
           emitState(if (player.playWhenReady) "playing" else "paused")
         }
@@ -310,7 +322,10 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-      if (player?.playbackState == Player.STATE_READY) emitState(if (playWhenReady) "playing" else "paused")
+      val player = player ?: return
+      // Paused: where it stopped, exactly.
+      if (!playWhenReady) sendTime(player, force = true)
+      if (player.playbackState == Player.STATE_READY) emitState(if (playWhenReady) "playing" else "paused")
     }
 
     override fun onTracksChanged(tracks: Tracks) {
@@ -340,15 +355,36 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /**
+   * Every event re-renders the player page, which is slow on a TV's CPU, so
+   * nothing is sent that the page wouldn't show: the time twice a second, and
+   * only when it moved (not while paused); what's buffered at most once a
+   * second, when it grew by a second or a seek moved it.
+   */
   private fun tick() {
     val player = player ?: return
     if (!loaded) return
-    emit("timeUpdate", JSObject().put("position", player.currentPosition / 1000.0).put("duration", duration(player) ?: JSONObject.NULL))
+    sendTime(player)
     val now = System.currentTimeMillis()
-    if (now - lastBufferedSent >= 1000) {
+    val start = player.currentPosition
+    val end = player.bufferedPosition
+    val moved = kotlin.math.abs(end - lastBufferedEnd) >= 1000 || kotlin.math.abs(start - lastBufferedStart) >= 5000
+    if (moved && now - lastBufferedSent >= 1000) {
       lastBufferedSent = now
+      lastBufferedStart = start
+      lastBufferedEnd = end
       emit("bufferedChange", JSObject().put("ranges", bufferedRanges(player)))
     }
+  }
+
+  private fun sendTime(player: ExoPlayer, force: Boolean = false) {
+    if (!loaded) return
+    val position = player.currentPosition
+    val duration = player.duration
+    if (!force && position == lastPosition && duration == lastDuration) return
+    lastPosition = position
+    lastDuration = duration
+    emit("timeUpdate", JSObject().put("position", position / 1000.0).put("duration", duration(player) ?: JSONObject.NULL))
   }
 
   private fun duration(player: ExoPlayer): Double? =
