@@ -15,3 +15,6 @@ export function formatOs(os: string): string {
 export function usesCommandKey(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.userAgent);
 }
+
+/** Set by the Tauri CLI for the renderer it builds (`android`, `macos`, ...). The Android build is the TV app. */
+export const IS_ANDROID = import.meta.env.TAURI_ENV_PLATFORM === 'android';

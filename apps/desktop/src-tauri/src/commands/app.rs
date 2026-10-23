@@ -11,7 +11,7 @@ pub struct AppInfo {
     os: &'static str,
     arch: &'static str,
     /// Whether this build includes the native player (`--features libmpv` on
-    /// macOS, Windows or Linux).
+    /// macOS, Windows or Linux), or Media3 on Android.
     native_player: bool,
     /// Whether Discord Rich Presence can work: the native player, and a
     /// Discord application ID set when building (`presence::APPLICATION_ID`).
@@ -32,7 +32,7 @@ pub fn app_info<R: Runtime>(app: AppHandle<R>) -> AppInfo {
         tauri_version: tauri::VERSION,
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
-        native_player: cfg!(native_player),
+        native_player: cfg!(native_player) || cfg!(target_os = "android"),
         discord_presence: cfg!(native_player) && crate::presence::is_configured(),
         smoke_test_url: std::env::var("KIRO_SMOKE_TEST_URL")
             .ok()

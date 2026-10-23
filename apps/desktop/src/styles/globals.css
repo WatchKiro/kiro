@@ -1,6 +1,12 @@
 @import 'tailwindcss';
 @import '@kiro/ui/styles.css';
 
+/*
+ * The Android TV app (`data-tv` on the root, set in main.tsx): the page is
+ * 960×540 CSS px on a TV, seen from across a room, inside overscan margins.
+ */
+@custom-variant tv (&:where([data-tv], [data-tv] *));
+
 @theme {
   /* Native system fonts: zero download, crisp rendering, works offline. */
   --font-sans:

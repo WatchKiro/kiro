@@ -25,7 +25,9 @@ import {
   VolumeX,
 } from 'lucide-react';
 import {
+  memo,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -454,137 +456,127 @@ function PlaybackSession({
     position: number | null;
   } | null>(null);
   const { setHover } = preview;
+  const onKeyUp = useEffectEvent((event: KeyboardEvent) => {
+    const hold = keyHold.current;
+    if (!hold || event.key !== hold.key) return;
+    keyHold.current = null;
+    if (hold.position === null) return;
+    // The scrub ends: one seek, where it got to.
+    setScrub(null);
+    setHover(null);
+    if (player) run(player.seek(hold.position));
+  });
+  // The window lost the key: a scrub ends where it is.
+  const onBlur = useEffectEvent(() => {
+    const hold = keyHold.current;
+    keyHold.current = null;
+    if (hold?.position === null || hold === null) return;
+    setScrub(null);
+    setHover(null);
+    if (player) run(player.seek(hold.position));
+  });
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented) return;
+    const action = keyAction(event);
+    const media = action?.kind === 'media' ? action.command : undefined;
+    if (!media && !isPlayerKey(event) && !onSeekBar(event)) return;
+    if (event.key === 'f' || event.key === 'F') {
+      event.preventDefault();
+      toggleFullscreen();
+    } else if (action?.kind === 'back' && !menuOpenRef.current) {
+      event.preventDefault();
+      if (event.key === 'Escape' && isFullscreen) exitFullscreen();
+      else onBack();
+      return;
+    } else if (media === 'stop') {
+      event.preventDefault();
+      onBack();
+      return;
+    }
+    if (!player || !view || !active) return;
+    const paused = state === 'paused' || state === 'ended';
+    const nothingFocused = event.target === document.body;
+    const letter = event.key.toLowerCase();
+    if (
+      event.code === 'Space' ||
+      media === 'playPause' ||
+      (media === 'play' && paused) ||
+      (media === 'pause' && !paused)
+    ) {
+      event.preventDefault();
+      run(paused ? player.play() : player.pause());
+    } else if (
+      event.key === 'ArrowLeft' ||
+      event.key === 'ArrowRight' ||
+      media === 'rewind' ||
+      media === 'fastForward'
+    ) {
+      event.preventDefault();
+      const direction = event.key === 'ArrowLeft' || media === 'rewind' ? -1 : 1;
+      const hold = keyHold.current;
+      if (event.repeat && hold?.key === event.key && view.duration) {
+        // Held: scrub from where the first press landed, faster the longer
+        // it's held, with the thumb and the preview card following.
+        const now = performance.now();
+        hold.since ??= now;
+        hold.position = keyScrubPosition(hold.from, direction, now - hold.since, view.duration);
+        setScrub(hold.position);
+        setHover({ position: hold.position, pressed: true });
+      } else if (!event.repeat) {
+        // A tap: a step, as before.
+        const target = clamp(view.position + direction * seekStep, 0, view.duration ?? Infinity);
+        keyHold.current = {
+          key: event.key,
+          direction,
+          from: target,
+          since: null,
+          position: null,
+        };
+        run(player.seek(target));
+      }
+    } else if (media === 'next' && playNext) {
+      event.preventDefault();
+      playNext();
+    } else if (media === 'previous') {
+      event.preventDefault();
+      run(player.seek(0));
+    } else if (event.key === 'm' && !onSeekBar(event)) {
+      run(player.setMuted(!view.muted));
+    } else if (event.key === '[' || event.key === ']') {
+      event.preventDefault();
+      stepSpeed(event.key === ']' ? 1 : -1);
+    } else if (letter === 'z' || letter === 'x') {
+      event.preventDefault();
+      nudge('subtitle', letter === 'x' ? 1 : -1);
+    } else if (letter === 'j' || letter === 'k') {
+      event.preventDefault();
+      nudge('audio', letter === 'k' ? 1 : -1);
+    } else if (
+      skipSegment &&
+      (event.key === 's' ||
+        event.key === 'S' ||
+        (event.key === 'Enter' && nothingFocused && skipShownRef.current))
+    ) {
+      event.preventDefault();
+      skip();
+    }
+  });
+  // Registered once. A listener added afresh on every render would miss a
+  // key: the first press with the controls hidden wakes them, and React
+  // re-renders between that listener and this one, swapping this one out.
   useEffect(() => {
-    const onKeyUp = (event: KeyboardEvent) => {
-      const hold = keyHold.current;
-      if (!hold || event.key !== hold.key) return;
-      keyHold.current = null;
-      if (hold.position === null) return;
-      // The scrub ends: one seek, where it got to.
-      setScrub(null);
-      setHover(null);
-      if (player) run(player.seek(hold.position));
-    };
-    // The window lost the key: a scrub ends where it is.
-    const onBlur = () => {
-      const hold = keyHold.current;
-      keyHold.current = null;
-      if (hold?.position === null || hold === null) return;
-      setScrub(null);
-      setHover(null);
-      if (player) run(player.seek(hold.position));
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      const action = keyAction(event);
-      const media = action?.kind === 'media' ? action.command : undefined;
-      if (!media && !isPlayerKey(event) && !onSeekBar(event)) return;
-      if (event.key === 'f' || event.key === 'F') {
-        event.preventDefault();
-        toggleFullscreen();
-      } else if (action?.kind === 'back' && !menuOpenRef.current) {
-        event.preventDefault();
-        if (event.key === 'Escape' && isFullscreen) exitFullscreen();
-        else onBack();
-        return;
-      } else if (media === 'stop') {
-        event.preventDefault();
-        onBack();
-        return;
-      }
-      if (!player || !view || !active) return;
-      const paused = state === 'paused' || state === 'ended';
-      const nothingFocused = event.target === document.body;
-      const letter = event.key.toLowerCase();
-      if (
-        event.code === 'Space' ||
-        media === 'playPause' ||
-        (media === 'play' && paused) ||
-        (media === 'pause' && !paused)
-      ) {
-        event.preventDefault();
-        run(paused ? player.play() : player.pause());
-      } else if (
-        event.key === 'ArrowLeft' ||
-        event.key === 'ArrowRight' ||
-        media === 'rewind' ||
-        media === 'fastForward'
-      ) {
-        event.preventDefault();
-        const direction = event.key === 'ArrowLeft' || media === 'rewind' ? -1 : 1;
-        const hold = keyHold.current;
-        if (event.repeat && hold?.key === event.key && view.duration) {
-          // Held: scrub from where the first press landed, faster the longer
-          // it's held, with the thumb and the preview card following.
-          const now = performance.now();
-          hold.since ??= now;
-          hold.position = keyScrubPosition(hold.from, direction, now - hold.since, view.duration);
-          setScrub(hold.position);
-          setHover({ position: hold.position, pressed: true });
-        } else if (!event.repeat) {
-          // A tap: a step, as before.
-          const target = clamp(view.position + direction * seekStep, 0, view.duration ?? Infinity);
-          keyHold.current = {
-            key: event.key,
-            direction,
-            from: target,
-            since: null,
-            position: null,
-          };
-          run(player.seek(target));
-        }
-      } else if (media === 'next' && playNext) {
-        event.preventDefault();
-        playNext();
-      } else if (media === 'previous') {
-        event.preventDefault();
-        run(player.seek(0));
-      } else if (event.key === 'm' && !onSeekBar(event)) {
-        run(player.setMuted(!view.muted));
-      } else if (event.key === '[' || event.key === ']') {
-        event.preventDefault();
-        stepSpeed(event.key === ']' ? 1 : -1);
-      } else if (letter === 'z' || letter === 'x') {
-        event.preventDefault();
-        nudge('subtitle', letter === 'x' ? 1 : -1);
-      } else if (letter === 'j' || letter === 'k') {
-        event.preventDefault();
-        nudge('audio', letter === 'k' ? 1 : -1);
-      } else if (
-        skipSegment &&
-        (event.key === 's' ||
-          event.key === 'S' ||
-          (event.key === 'Enter' && nothingFocused && skipShownRef.current))
-      ) {
-        event.preventDefault();
-        skip();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
+    const keydown = (event: KeyboardEvent) => onKey(event);
+    const keyup = (event: KeyboardEvent) => onKeyUp(event);
+    const blur = () => onBlur();
+    window.addEventListener('keydown', keydown);
+    window.addEventListener('keyup', keyup);
+    window.addEventListener('blur', blur);
     return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('keydown', keydown);
+      window.removeEventListener('keyup', keyup);
+      window.removeEventListener('blur', blur);
     };
-  }, [
-    player,
-    view,
-    active,
-    state,
-    seekStep,
-    setHover,
-    toggleFullscreen,
-    exitFullscreen,
-    isFullscreen,
-    onBack,
-    playNext,
-    skipSegment,
-    skip,
-    nudge,
-    stepSpeed,
-  ]);
+  }, []);
 
   const idleTimer = useRef<number>(undefined);
   useEffect(() => {
@@ -673,7 +665,7 @@ function PlaybackSession({
   }, [skipShown]);
   /** Where cards over the video sit: above the controls, or low when they're hidden. */
   const cornerClass = cx(
-    'absolute right-8 z-10 transition-[bottom] duration-500',
+    'absolute right-8 z-10 transition-[bottom] duration-500 tv:right-12',
     hidden ? 'bottom-8' : 'bottom-36',
   );
 
@@ -719,7 +711,7 @@ function PlaybackSession({
       <div
         data-nav-skip={hidden || undefined}
         className={cx(
-          'absolute inset-x-0 top-0 flex items-center gap-4 bg-linear-to-b from-black/75 via-black/30 to-transparent px-6 pt-5 pb-16 transition-opacity duration-500',
+          'absolute inset-x-0 top-0 flex items-center gap-4 bg-linear-to-b from-black/75 via-black/30 to-transparent px-6 pt-5 pb-16 transition-opacity duration-500 tv:px-12 tv:pt-7',
           hidden && 'pointer-events-none opacity-0',
         )}
       >
@@ -961,7 +953,14 @@ interface ControlsProps {
   streams: StreamSwitching | null;
 }
 
-function Controls({
+/**
+ * The bar is faded out for most of a film, while the player page re-renders
+ * on every time update. It isn't re-rendered while it stays hidden, which
+ * matters on a TV's slow CPU; it catches up as it shows.
+ */
+const Controls = memo(ControlsBar, (previous, next) => previous.hidden && next.hidden);
+
+function ControlsBar({
   player,
   view,
   subtitles,
@@ -1011,7 +1010,7 @@ function Controls({
     <div
       data-nav-skip={hidden || undefined}
       className={cx(
-        'absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 via-black/45 to-transparent px-8 pt-24 pb-6 transition-opacity duration-500',
+        'absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 via-black/45 to-transparent px-8 pt-24 pb-6 transition-opacity duration-500 tv:px-12 tv:pb-7',
         hidden && 'pointer-events-none opacity-0',
       )}
     >

@@ -140,6 +140,13 @@ webkit2gtk = { version = "2.0", optional = true }
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 keepawake = { version = "=0.6.0", optional = true }
 
+# Android: certificate checks go through the system's trust manager
+# (src/android.rs). The versions reqwest's rustls-platform-verifier uses.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1"
+rustls-platform-verifier = "0.7"
+
 [dev-dependencies]
 # Mock runtime for IPC/permission tests.
 tauri = { version = "2.12", features = ["test"] }

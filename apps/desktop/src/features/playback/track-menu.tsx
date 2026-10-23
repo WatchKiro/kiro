@@ -155,6 +155,8 @@ export function ControlPopover({
         event.key === 'Escape' ||
         (event.key === 'Backspace' && !isTextField(document.activeElement));
       if (!back) return;
+      // Taken: Android TV leaves the app on a Back nothing took.
+      event.preventDefault();
       if (panel.current?.contains(document.activeElement) && trigger.current) {
         focusWithKeys(trigger.current);
       }

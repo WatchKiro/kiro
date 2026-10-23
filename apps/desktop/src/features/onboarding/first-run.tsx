@@ -11,6 +11,7 @@ import { activeProfile } from '@/features/profiles/profiles-data';
 import { useProfilesStore } from '@/features/profiles/profiles-store';
 import { isTextField, keyAction } from '@/features/remote/keys';
 import { focusWithKeys } from '@/features/remote/remote-navigation';
+import { IS_ANDROID } from '@/lib/platform';
 import { isNativeRuntime } from '@/services/native';
 
 /**
@@ -65,8 +66,10 @@ function FirstRunSetup({ atLaunch }: { atLaunch: boolean }) {
   const close = () => finish(done ? 'completed' : 'skipped');
   const onBack = useEffectEvent(close);
 
-  // Starts on the link field, ready for a paste.
+  // Starts on the link field, ready for a paste. Not on a TV, where a
+  // focused field opens the on-screen keyboard and takes the D-pad.
   useEffect(() => {
+    if (IS_ANDROID) return;
     const field = document.getElementById(inputId);
     if (field) focusWithKeys(field);
   }, [inputId]);
@@ -94,7 +97,7 @@ function FirstRunSetup({ atLaunch }: { atLaunch: boolean }) {
       aria-modal="true"
       aria-labelledby={headingId}
       data-nav-layer
-      className="fixed inset-0 z-40 flex flex-col overflow-y-auto bg-ink-950 text-ink-100"
+      className="fixed inset-0 z-40 flex flex-col overflow-y-auto bg-ink-950 text-ink-100 tv:px-12 tv:py-7"
     >
       <div
         aria-hidden

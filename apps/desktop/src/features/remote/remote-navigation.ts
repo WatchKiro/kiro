@@ -4,6 +4,7 @@ import type { router as appRouter } from '@/app/router';
 import { isTextField, keyAction, ownsArrow } from '@/features/remote/keys';
 import { useShortcutsHelpStore } from '@/features/remote/shortcuts-store';
 import { FocusMemory, chooseMove, type Direction, type NavItem } from '@/features/remote/spatial';
+import { IS_ANDROID } from '@/lib/platform';
 
 /**
  * Keyboard and remote-control navigation for the whole app: arrows move focus
@@ -63,8 +64,9 @@ function reducedMotion() {
  * in); controls faded out of the way are marked `data-nav-skip` instead.
  */
 function isShown(element: HTMLElement) {
-  if (element.getClientRects().length === 0) return false;
-  return element.checkVisibility?.({ visibilityProperty: true }) ?? true;
+  // `checkVisibility` is also false without a box (`display: none`).
+  if (element.checkVisibility) return element.checkVisibility({ visibilityProperty: true });
+  return element.getClientRects().length > 0;
 }
 
 /** Whether arrows can move focus to `element`. */
@@ -274,15 +276,67 @@ function openMenu(active: HTMLElement | null): boolean {
   );
 }
 
-function goBack(router: Router) {
+/** Returns false on the home page, with nothing to go back to. */
+function goBack(router: Router): boolean {
   const { location } = router.state;
   // `default` is the first entry of this session: nothing to go back to.
   if (location.key !== 'default') void router.navigate(-1);
   else if (location.pathname !== '/') void router.navigate('/');
+  else return false;
+  return true;
+}
+
+/**
+ * A TV remote has no Menu key: OK held down opens the focused card's menu
+ * (Android's long press). So on Android, OK on a link waits to open it until
+ * the key comes up, as Android's own views do; still down after
+ * `HOLD_FOR_MENU_MS`, it asks for the menu instead. A timer, because how a
+ * held key repeats differs between remotes (Android's WebView doesn't mark
+ * repeats at all).
+ */
+const HOLD_FOR_MENU = IS_ANDROID;
+const HOLD_FOR_MENU_MS = 500;
+
+/** OK pressed on a link and not yet released; `opened` once it brought up a menu. */
+let held: { target: HTMLElement; timer: number; opened: boolean; since: number } | null = null;
+
+/** A press held this long was let go unseen (the window lost the key up). */
+const HELD_TOO_LONG_MS = 5000;
+
+/** OK on a link with `HOLD_FOR_MENU`: waits for the key to come up, or opens the menu if held. */
+function holdToActivate(target: HTMLElement): boolean {
+  if (held) return true; // A repeat of the press being held.
+  const press = {
+    target,
+    opened: false,
+    since: performance.now(),
+    timer: window.setTimeout(() => {
+      if (held === press && document.activeElement === target) press.opened = openMenu(target);
+    }, HOLD_FOR_MENU_MS),
+  };
+  held = press;
+  return true;
+}
+
+function onKeyUp(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || !held) return;
+  const { target, timer, opened } = held;
+  window.clearTimeout(timer);
+  held = null;
+  // Released before it was held long enough: an ordinary press. Held on a
+  // link without a menu: it opens on release all the same.
+  if (!opened && document.activeElement === target) target.click();
 }
 
 function onKeyDown(router: Router, event: KeyboardEvent) {
   if (event.defaultPrevented || event.isComposing) return;
+  // OK still held (perhaps after it opened a menu): its repeats would press
+  // again, or the menu's first item.
+  if (held && performance.now() - held.since > HELD_TOO_LONG_MS) held = null;
+  if (event.key === 'Enter' && held) {
+    event.preventDefault();
+    return;
+  }
   const action = keyAction(event);
   usingKeys = action !== null || event.key === 'Tab' || usingKeys;
   if (!action) return;
@@ -312,6 +366,10 @@ function onKeyDown(router: Router, event: KeyboardEvent) {
     }
     case 'activate':
       if (event.key === ' ' && keys.includes('space')) return;
+      if (HOLD_FOR_MENU && event.key === 'Enter' && field?.matches('a[href]')) {
+        handled = holdToActivate(field);
+        break;
+      }
       handled = activate(event, active);
       break;
     case 'back':
@@ -319,8 +377,7 @@ function onKeyDown(router: Router, event: KeyboardEvent) {
       // dialog, a widget or page with its own Back.
       if (isTextField(field) || topLayer() || keys.includes('back')) return;
       if (field?.closest('[data-nav-own~="back"]')) return;
-      goBack(router);
-      handled = true;
+      handled = goBack(router);
       break;
     case 'menu':
       handled = openMenu(field);
@@ -372,14 +429,24 @@ function identityOf(element: HTMLElement) {
   );
 }
 
+/**
+ * The navigable items with `identity`, in document order. Compares the
+ * identity first: it runs on every focus change, and checking every item's
+ * box would lay out the page each time (slow on a TV's CPU).
+ */
+function navigablesWith(identity: string): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>(FOCUSABLE)]
+    .filter((element) => identityOf(element) === identity)
+    .filter(isNavigable);
+}
+
 function describe(element: HTMLElement): FocusSnapshot {
   const identity = identityOf(element);
-  const same = navigables(document).filter((other) => identityOf(other) === identity);
-  return { identity, ordinal: Math.max(0, same.indexOf(element)) };
+  return { identity, ordinal: Math.max(0, navigablesWith(identity).indexOf(element)) };
 }
 
 function find(snapshot: FocusSnapshot): HTMLElement | undefined {
-  const same = navigables(document).filter((element) => identityOf(element) === snapshot.identity);
+  const same = navigablesWith(snapshot.identity);
   return same[snapshot.ordinal] ?? same[0];
 }
 
@@ -451,12 +518,14 @@ export function installRemoteNavigation(router: Router): () => void {
   // Capture on the window: before any page's own key handling, which skips
   // keys this handled (`defaultPrevented`).
   window.addEventListener('keydown', keydown, true);
+  window.addEventListener('keyup', onKeyUp, true);
   window.addEventListener('pointerdown', pointerdown, true);
   document.addEventListener('focusin', focusin);
   document.addEventListener('focusout', onFocusOut);
   const unsubscribe = settleFocus(router);
   return () => {
     window.removeEventListener('keydown', keydown, true);
+    window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('pointerdown', pointerdown, true);
     document.removeEventListener('focusin', focusin);
     document.removeEventListener('focusout', onFocusOut);

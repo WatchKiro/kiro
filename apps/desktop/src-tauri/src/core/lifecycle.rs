@@ -7,6 +7,8 @@ use crate::storage::StoragePaths;
 /// (indexing, network, migrations) belongs on a background task so startup
 /// stays instant.
 pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "android")]
+    crate::android::init_tls_verifier()?;
     let storage = StoragePaths::resolve(app.handle())?;
     app.manage(AppState::new(storage));
     crate::updates::start(app.handle());

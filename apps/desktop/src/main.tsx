@@ -7,8 +7,11 @@ import { router } from '@/app/router';
 import { SmokeTestStart } from '@/app/smoke-test';
 import { hideSplash } from '@/app/splash';
 import { SplashHandoff } from '@/app/splash-handoff';
+import { installAndroidBack } from '@/features/remote/android-back';
+import { installTvTextFields } from '@/features/remote/android-text-fields';
 import { installRemoteNavigation } from '@/features/remote/remote-navigation';
 import { ShortcutsHelp } from '@/features/remote/shortcuts-help';
+import { IS_ANDROID } from '@/lib/platform';
 
 import '@/styles/globals.css';
 
@@ -20,11 +23,15 @@ async function start() {
     installPreviewBackend();
   }
 
+  if (IS_ANDROID) document.documentElement.dataset.tv = '';
+
   const container = document.getElementById('root');
   if (!container) throw new Error('Kiro: #root element missing from index.html');
 
   // Arrows, Enter and Back from a keyboard or remote, on every page.
   installRemoteNavigation(router);
+  installAndroidBack();
+  installTvTextFields();
 
   createRoot(container).render(
     <StrictMode>

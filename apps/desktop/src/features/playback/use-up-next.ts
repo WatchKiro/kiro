@@ -68,7 +68,8 @@ export function useUpNext(
   const addons = useAddonsStore((state) => state.addons);
   const loadAddons = useAddonsStore((state) => state.load);
   const sources = useMemo(() => metaAddons(addons, type, id), [addons, type, id]);
-  const metaEntry = useTitleStore((state) => state.metas[metaKey(type, id, sources)]);
+  const key = useMemo(() => metaKey(type, id, sources), [type, id, sources]);
+  const metaEntry = useTitleStore((state) => state.metas[key]);
   const loadMeta = useTitleStore((state) => state.loadMeta);
   const loadAddonStreams = useTitleStore((state) => state.loadAddonStreams);
 

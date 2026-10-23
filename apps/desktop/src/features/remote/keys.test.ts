@@ -97,6 +97,20 @@ describe('ownsArrow', () => {
     assert.equal(ownsArrow(search, 'down'), false);
   });
 
+  it('lets every arrow leave a read-only text field (a TV field before OK)', () => {
+    const locked = {
+      tagName: 'INPUT',
+      type: 'search',
+      readOnly: true,
+      selectionStart: 2,
+      selectionEnd: 2,
+      value: 'dune',
+    };
+    assert.equal(ownsArrow(locked, 'left'), false);
+    assert.equal(ownsArrow(locked, 'right'), false);
+    assert.equal(ownsArrow(locked, 'left', true), false);
+  });
+
   it('leaves a text field past either end of its text, unless the key is held', () => {
     const at = (caret: number, end = caret) => ({
       tagName: 'INPUT',

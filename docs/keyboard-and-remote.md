@@ -1,6 +1,6 @@
 # Keyboard and remote control
 
-Kiro can be used from a sofa with arrows, Enter and Back, as on a TV. The same code will drive a future Android TV build, where a remote's D-pad arrives as arrow keys. This page covers the keys, how focus moves, what remotes send, and how pages opt in.
+Kiro can be used from a sofa with arrows, Enter and Back, as on a TV. The same code drives the Android TV build, where a remote's D-pad arrives as arrow keys (see [Android TV](#android-tv)). This page covers the keys, how focus moves, what remotes send, and how pages opt in.
 
 `?` opens the shortcuts overlay anywhere in the app, and Settings has a button for it.
 
@@ -55,7 +55,7 @@ The rules for choosing the next item follow Android's FocusFinder: only items wh
 - **No traps.** Faded-out player controls give up focus when they hide, so Enter can't press what can't be seen; the next arrow brings them back. Menus (`data-nav-layer`) keep the arrows in while open and return focus to their button when closed.
 - **Customise.** The row editor on Discover, Movies and TV Shows is a layer: arrows move between its buttons and switches, Escape or Back closes it. Moving or hiding a row keeps focus on that control (or the next row's); see [discover.md](discover.md#customising).
 - **Who’s watching?** The profile picker and its PIN pad are layers: arrows move between the tiles (or the on-screen digits, which can also be typed), Enter chooses, and Back returns from the PIN pad to the tiles or closes a picker opened to switch. See [profiles.md](profiles.md#keyboard-and-remote).
-- **First-run setup.** A layer over the app: focus starts on the link field, and Escape or Back skips it (not while typing). See [first-run.md](first-run.md#keyboard-and-remote).
+- **First-run setup.** A layer over the app: focus starts on the link field (not on Android TV, where a focused field opens the keyboard), and Escape or Back skips it (not while typing). See [first-run.md](first-run.md#keyboard-and-remote).
 - **Card menus.** The Menu key (or Shift F10) opens the focused card's menu, as a right click would: the navigation sends the card a `contextmenu` event. The menus are layers; their "⋯" buttons are `data-nav-skip`, so a row's Left and Right still go card to card. See [library.md](library.md#menus-with-the-mouse-keyboard-and-remote).
 - **Notices.** Removing a title from Continue watching with the keys focuses the notice's Undo; Back closes the notice (`data-nav-own="back"`) and focus goes to the card beside the removed one.
 - **Over the video.** Skip intro/credits and Up next sit above the control bar and are reached with Up; while the controls are hidden, the first arrow lands on Skip. The resume prompt keeps the arrows on its two buttons.
@@ -84,21 +84,32 @@ Pages that handle keys themselves should skip events that are already `defaultPr
 
 ## What remotes send
 
-| Button                | Typically arrives as                                                                                                                                                                                                                                                                    |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D-pad                 | `ArrowUp`/`ArrowDown`/`ArrowLeft`/`ArrowRight`, on every platform                                                                                                                                                                                                                       |
-| OK / Select / centre  | `Enter` (Android's `DPAD_CENTER` too)                                                                                                                                                                                                                                                   |
-| Back                  | Android TV: `KEYCODE_BACK` goes to the activity, not the page, so the Android shell must forward it (for example as `Escape`, or by calling `history.back()`). LG webOS: key code 461. Samsung Tizen: key code 10009 (`XF86Back`). Air mice and HID remotes: `BrowserBack` or `Escape`. |
-| Play/Pause            | `MediaPlayPause`; HbbTV-style TVs send Play (415) and Pause (19) separately. Tizen needs media keys registered (`tizen.tvinputdevice.registerKey`) before it sends them.                                                                                                                |
-| Fast-forward / rewind | `MediaFastForward` / `MediaRewind` (417 / 412 on HbbTV-style TVs)                                                                                                                                                                                                                       |
-| Next / previous       | `MediaTrackNext` / `MediaTrackPrevious`                                                                                                                                                                                                                                                 |
-| Stop                  | `MediaStop` (413)                                                                                                                                                                                                                                                                       |
-| Menu / Options        | `ContextMenu` where the platform maps it (Android's `KEYCODE_MENU`; untested on a TV). Opens the focused card's menu. Keyboards: the Menu key, or Shift F10                                                                                                                             |
-| Colour buttons        | 403–406 (red, green, yellow, blue): not used yet                                                                                                                                                                                                                                        |
+| Button                | Typically arrives as                                                                                                                                                                                                                                  |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-pad                 | `ArrowUp`/`ArrowDown`/`ArrowLeft`/`ArrowRight`, on every platform                                                                                                                                                                                     |
+| OK / Select / centre  | `Enter` (Android's `DPAD_CENTER` too)                                                                                                                                                                                                                 |
+| Back                  | Android TV: `KEYCODE_BACK` goes to the activity, not the page; Kiro forwards it as `Escape` (see [Android TV](#android-tv)). LG webOS: key code 461. Samsung Tizen: key code 10009 (`XF86Back`). Air mice and HID remotes: `BrowserBack` or `Escape`. |
+| Play/Pause            | `MediaPlayPause`; HbbTV-style TVs send Play (415) and Pause (19) separately. Tizen needs media keys registered (`tizen.tvinputdevice.registerKey`) before it sends them.                                                                              |
+| Fast-forward / rewind | `MediaFastForward` / `MediaRewind` (417 / 412 on HbbTV-style TVs)                                                                                                                                                                                     |
+| Next / previous       | `MediaTrackNext` / `MediaTrackPrevious`                                                                                                                                                                                                               |
+| Stop                  | `MediaStop` (413)                                                                                                                                                                                                                                     |
+| Menu / Options        | `ContextMenu` where the platform maps it; Android TV's `KEYCODE_MENU` reaches the page as nothing, so there OK held opens the menu. Keyboards: the Menu key, or Shift F10                                                                             |
+| Colour buttons        | 403–406 (red, green, yellow, blue): not used yet                                                                                                                                                                                                      |
 
 `keys.ts` maps all of these, including the key codes TV browsers send without a `key` value.
 
 On macOS the system sends the keyboard's media keys (F7–F9) to the app that owns "Now Playing". Kiro's video plays in libmpv rather than in the webview, so the webview has no media session and usually doesn't receive them; a later change can register the player with `MPRemoteCommandCenter` on the Rust side and forward the commands.
+
+## Android TV
+
+The Android build (`IS_ANDROID`, `lib/platform.ts`) adds what a TV remote needs:
+
+- **Back** (`android-back.ts`). Android handles Back itself: it steps back through the webview's history, then leaves the app, past any open menu. Kiro listens with `onBackButtonPress` and sends the page an `Escape` instead, so menus close and pages go back as with the keyboard. When nothing takes it (`defaultPrevented` stays false), Back was pressed on the home page and the app exits, so handlers that take Back must call `preventDefault()`.
+- **Hold OK for a card's menu.** The Menu key sends nothing to the page. On Android, OK on a link opens it when the key comes up, as Android's own views do. Held for 500 ms, it opens the card's menu instead, and the held key's repeats are swallowed. This is timed, not counted in repeats, because Android's WebView doesn't mark repeats.
+- **Text fields** (`android-text-fields.ts`). A focused field opens the on-screen keyboard, which then takes the D-pad. A field reached with the keys stays read-only, with no keyboard, until OK is pressed on it. A read-only field doesn't keep Left and Right (`ownsArrow`).
+- **The `tv:` variant** (`styles/globals.css`). Classes that apply only on Android TV: `data-tv` on the root, set in `main.tsx`. The page is 960×540 CSS px at a 1080p TV's 320 dpi, inside overscan margins of 48 by 28 px. The sidebar starts collapsed, and the heroes are shorter.
+
+`scripts/android-perf.mjs` measures each of these for smoothness on a device or emulator; see [docs/spikes/android-tv.md](spikes/android-tv.md#performance).
 
 ## Testing
 

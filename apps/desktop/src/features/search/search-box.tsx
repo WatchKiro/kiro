@@ -130,7 +130,7 @@ export function SearchBox() {
         className="h-10 w-full rounded-full border border-white/10 bg-ink-950/40 pr-16 pl-10 text-sm text-ink-100 backdrop-blur-xl transition-colors placeholder:text-ink-400 focus:border-accent/50 focus:bg-ink-950/70 focus:outline-none [&::-webkit-search-cancel-button]:hidden"
       />
       {!focused && !value && (
-        <kbd className="pointer-events-none absolute right-3.5 font-sans text-[11px] font-medium text-ink-500">
+        <kbd className="pointer-events-none absolute right-3.5 font-sans text-[11px] font-medium text-ink-500 tv:hidden">
           {shortcut}
         </kbd>
       )}
