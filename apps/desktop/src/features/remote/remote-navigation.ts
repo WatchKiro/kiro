@@ -1,6 +1,7 @@
 import { NavigationType } from 'react-router';
 
 import type { router as appRouter } from '@/app/router';
+import { IS_ANDROID } from '@/features/remote/android-back';
 import { isTextField, keyAction, ownsArrow } from '@/features/remote/keys';
 import { useShortcutsHelpStore } from '@/features/remote/shortcuts-store';
 import { FocusMemory, chooseMove, type Direction, type NavItem } from '@/features/remote/spatial';
@@ -285,8 +286,57 @@ function goBack(router: Router): boolean {
   return true;
 }
 
+/**
+ * A TV remote has no Menu key: OK held down opens the focused card's menu
+ * (Android's long press). So on Android, OK on a link waits to open it until
+ * the key comes up, as Android's own views do; still down after
+ * `HOLD_FOR_MENU_MS`, it asks for the menu instead. A timer, because how a
+ * held key repeats differs between remotes (Android's WebView doesn't mark
+ * repeats at all).
+ */
+const HOLD_FOR_MENU = IS_ANDROID;
+const HOLD_FOR_MENU_MS = 500;
+
+/** OK pressed on a link and not yet released; `opened` once it brought up a menu. */
+let held: { target: HTMLElement; timer: number; opened: boolean; since: number } | null = null;
+
+/** A press held this long was let go unseen (the window lost the key up). */
+const HELD_TOO_LONG_MS = 5000;
+
+/** OK on a link with `HOLD_FOR_MENU`: waits for the key to come up, or opens the menu if held. */
+function holdToActivate(target: HTMLElement): boolean {
+  if (held) return true; // A repeat of the press being held.
+  const press = {
+    target,
+    opened: false,
+    since: performance.now(),
+    timer: window.setTimeout(() => {
+      if (held === press && document.activeElement === target) press.opened = openMenu(target);
+    }, HOLD_FOR_MENU_MS),
+  };
+  held = press;
+  return true;
+}
+
+function onKeyUp(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || !held) return;
+  const { target, timer, opened } = held;
+  window.clearTimeout(timer);
+  held = null;
+  // Released before it was held long enough: an ordinary press. Held on a
+  // link without a menu: it opens on release all the same.
+  if (!opened && document.activeElement === target) target.click();
+}
+
 function onKeyDown(router: Router, event: KeyboardEvent) {
   if (event.defaultPrevented || event.isComposing) return;
+  // OK still held (perhaps after it opened a menu): its repeats would press
+  // again, or the menu's first item.
+  if (held && performance.now() - held.since > HELD_TOO_LONG_MS) held = null;
+  if (event.key === 'Enter' && held) {
+    event.preventDefault();
+    return;
+  }
   const action = keyAction(event);
   usingKeys = action !== null || event.key === 'Tab' || usingKeys;
   if (!action) return;
@@ -316,6 +366,10 @@ function onKeyDown(router: Router, event: KeyboardEvent) {
     }
     case 'activate':
       if (event.key === ' ' && keys.includes('space')) return;
+      if (HOLD_FOR_MENU && event.key === 'Enter' && field?.matches('a[href]')) {
+        handled = holdToActivate(field);
+        break;
+      }
       handled = activate(event, active);
       break;
     case 'back':
@@ -464,12 +518,14 @@ export function installRemoteNavigation(router: Router): () => void {
   // Capture on the window: before any page's own key handling, which skips
   // keys this handled (`defaultPrevented`).
   window.addEventListener('keydown', keydown, true);
+  window.addEventListener('keyup', onKeyUp, true);
   window.addEventListener('pointerdown', pointerdown, true);
   document.addEventListener('focusin', focusin);
   document.addEventListener('focusout', onFocusOut);
   const unsubscribe = settleFocus(router);
   return () => {
     window.removeEventListener('keydown', keydown, true);
+    window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('pointerdown', pointerdown, true);
     document.removeEventListener('focusin', focusin);
     document.removeEventListener('focusout', onFocusOut);
