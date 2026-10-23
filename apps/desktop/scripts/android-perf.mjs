@@ -7,12 +7,16 @@
 //   node scripts/android-perf.mjs latency [row|down] [--throttle 6]
 //   node scripts/android-perf.mjs styles [row|down]
 //   node scripts/android-perf.mjs layers
+//   node scripts/android-perf.mjs playback [playing|paused]
 //
 // - latency: from each key press to the next frame (Event Timing), and the
 //   time spent in key handlers. `--throttle` slows the page's CPU (6 is
 //   roughly a TV box's Cortex-A53 against an Apple M1 core).
 // - styles: style recalculations and elements restyled per press.
 // - layers: composited layers on the page.
+// - playback: the page's main-thread work while a stream plays with the
+//   controls hidden (or paused, with them shown), per second. The stream is
+//   KIRO_PERF_STREAM, by default a public HLS test stream.
 //
 // Routes start from the first poster of the first row on Discover: `row`
 // goes right ten times and back four, `down` goes down four rows and up two.
@@ -33,12 +37,21 @@ const ROUTES = {
   ],
 };
 
-const [mode = 'latency', routeName = 'row', ...rest] = process.argv.slice(2);
+const STREAM = process.env.KIRO_PERF_STREAM ?? 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+
+const [mode = 'latency', routeName, ...rest] = process.argv.slice(2);
 const throttleAt = rest.indexOf('--throttle');
 const throttle = throttleAt >= 0 ? Number(rest[throttleAt + 1]) : 1;
-const route = ROUTES[routeName];
-if (!['latency', 'styles', 'layers'].includes(mode) || !route) {
-  console.error('usage: android-perf.mjs latency|styles|layers [row|down] [--throttle N]');
+const route = ROUTES[routeName ?? 'row'];
+const playbackState = routeName ?? 'playing';
+const valid =
+  mode === 'playback'
+    ? ['playing', 'paused'].includes(playbackState)
+    : ['latency', 'styles', 'layers'].includes(mode) && route;
+if (!valid) {
+  console.error(
+    'usage: android-perf.mjs latency|styles|layers [row|down] [--throttle N] | playback [playing|paused]',
+  );
   process.exit(2);
 }
 
@@ -100,7 +113,26 @@ async function press(pause = 120) {
   await sleep(1500);
 }
 
-const presses = route.reduce((sum, [, times]) => sum + times, 0);
+const presses = route?.reduce((sum, [, times]) => sum + times, 0) ?? 0;
+
+/** A Chrome trace of the page while `during` runs. */
+async function trace(page, categories, during) {
+  const events = [];
+  let finish;
+  const finished = new Promise((resolve) => (finish = resolve));
+  page.listeners.add((data) => {
+    if (data.method === 'Tracing.dataCollected') events.push(...data.params.value);
+    if (data.method === 'Tracing.tracingComplete') finish();
+  });
+  await page.send('Tracing.start', {
+    traceConfig: { includedCategories: categories },
+    transferMode: 'ReportEvents',
+  });
+  await during();
+  await page.send('Tracing.end');
+  await finished;
+  return events;
+}
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted.length ? +sorted[Math.floor(sorted.length / 2)].toFixed(1) : null;
@@ -163,22 +195,54 @@ try {
         fps: +((frames.length - 1) / seconds).toFixed(1),
       }),
     );
+  } else if (mode === 'playback') {
+    await page.evaluate(`(() => {
+      history.pushState({ usr: { url: ${JSON.stringify(STREAM)}, title: 'Performance' }, key: 'perf' + Date.now(), idx: 1 }, '', '/player');
+      dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
+    })()`);
+    // Playing, then the controls hide after a few seconds without input.
+    await sleep(12000);
+    if (playbackState === 'paused') {
+      adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PLAY_PAUSE');
+      await sleep(3000);
+    }
+    const seconds = 8;
+    // DOM changes: what re-rendering actually changed, whatever the CPU's load.
+    await page.evaluate(`(() => {
+      window.__kiroMutations = 0;
+      window.__kiroObserver = new MutationObserver((records) => { window.__kiroMutations += records.length; });
+      window.__kiroObserver.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    })()`);
+    const events = await trace(page, ['devtools.timeline', 'toplevel', 'v8'], () =>
+      sleep(seconds * 1000),
+    );
+    const mutations = await page.evaluate(
+      `(() => { window.__kiroObserver.disconnect(); return window.__kiroMutations; })()`,
+    );
+    const main = new Set(
+      events
+        .filter((e) => e.ph === 'M' && e.name === 'thread_name' && e.args.name === 'CrRendererMain')
+        .map((e) => `${e.pid}:${e.tid}`),
+    );
+    const onMain = (name) =>
+      events.filter((e) => e.ph === 'X' && e.name === name && main.has(`${e.pid}:${e.tid}`));
+    const total = (list) => list.reduce((sum, e) => sum + e.dur / 1000, 0);
+    const perSecond = (value) => +(value / seconds).toFixed(1);
+    console.log(
+      JSON.stringify({
+        playback: playbackState,
+        perSecond: {
+          mainThreadMs: perSecond(total(onMain('ThreadControllerImpl::RunTask'))),
+          scriptMs: perSecond(total(onMain('FunctionCall'))),
+          messages: perSecond(onMain('EvaluateScript').length),
+          domChanges: perSecond(mutations),
+        },
+      }),
+    );
+    adb('shell', 'input', 'keyevent', 'KEYCODE_BACK');
   } else {
     await start(page);
-    const events = [];
-    let finish;
-    const finished = new Promise((resolve) => (finish = resolve));
-    page.listeners.add((data) => {
-      if (data.method === 'Tracing.dataCollected') events.push(...data.params.value);
-      if (data.method === 'Tracing.tracingComplete') finish();
-    });
-    await page.send('Tracing.start', {
-      traceConfig: { includedCategories: ['devtools.timeline', 'blink'] },
-      transferMode: 'ReportEvents',
-    });
-    await press(400);
-    await page.send('Tracing.end');
-    await finished;
+    const events = await trace(page, ['devtools.timeline', 'blink'], () => press(400));
     const styles = events.filter((e) => e.name === 'UpdateLayoutTree' && e.ph === 'X');
     const layouts = events.filter((e) => e.name === 'Layout' && e.ph === 'X');
     const sum = (list, value) => list.reduce((total, e) => total + value(e), 0);
