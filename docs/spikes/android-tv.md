@@ -133,7 +133,13 @@ Two consequences:
 - `goBack` reports when there is nothing to go back to.
 - The player's track menu now calls `preventDefault()`. Before, Back in that menu would have left the app.
 
-**Text fields:** on a TV, focusing a text field hands the D-pad to the on-screen keyboard (the keys arrive as `Unidentified`, 229). First run used to focus its link field, so the D-pad seemed dead. It no longer does on Android. Search has the same pattern.
+**Text fields:** on a TV, focusing a text field opens the on-screen keyboard, which then takes the D-pad (the keys arrive as `Unidentified`, 229), so focus can't move past the field. The header's search box trapped Up this way.
+
+- First run no longer focuses its link field on Android.
+- `android-text-fields.ts`: a field reached with the D-pad stays read-only, so no keyboard opens, and every arrow moves on (`ownsArrow` lets read-only fields go). OK makes it editable and opens the keyboard, and leaving the field gives it back.
+- Checked on the emulator: Up reached search with no keyboard, Down left it, OK opened the keyboard, typing "dune" searched, Back closed the keyboard, and Down went to the results.
+
+**Card menus:** a card's menu (mark watched and so on) opens with the Menu key, which TV remotes don't send. On a TV, the convention is a long press of OK. That is for the TV UI pass.
 
 ## 4. TV specifics
 
@@ -149,7 +155,7 @@ Two consequences:
   - release build, at rest on Discover: Kiro's process 118 MB PSS (252 MB RSS), the WebView renderer 216 MB RSS;
   - debug build, playing 1080p H.264: Kiro's process 223 MB PSS (362 MB RSS), the WebView renderer about 200 MB RSS.
 
-  Cheap boxes have 1 to 2 GB of RAM, so this needs measuring during playback on a 1 GB device. Animations, blur and big artwork are the levers. Nothing on the emulator was slow, but the emulator runs on an M1.
+  Cheap boxes have 1 to 2 GB of RAM, so this needs measuring during playback on a 1 GB device. Speed is covered in [Performance](#performance).
 
 ## 5. Distribution
 
@@ -202,10 +208,59 @@ Two consequences:
 
 A separate `apps/tv` would mean duplicating `src-tauri`, or splitting the core into a shared crate first. That is a large refactor with no benefit at this size.
 
-**Decisions for you:**
+**Decided (2026-10-23):** Media3, the Android target of `apps/desktop`, and the application ID `app.kiro.tv`. Smoothness on low-end boxes is a requirement for every step (see [Performance](#performance)). Still open: whether the same APK should also be offered for phones and tablets (more layout work).
 
-- the Android application ID: `app.kiro.tv` on the branch, which is permanent once released;
-- whether the same APK should also be offered for phones and tablets (more layout work).
+## Performance
+
+Smoothness on cheap boxes is a requirement, so the first optimisation pass was measured, not guessed.
+
+**Rig.** An Android TV 16 emulator (`Kiro_TV_LowEnd`) with 2 cores, 2 GB of RAM and a software GPU (SwiftShader), running a release build with WebView debugging (`--features tauri/devtools`). `apps/desktop/scripts/android-perf.mjs` presses remote keys with adb and reads the page over the DevTools protocol:
+
+- **Latency:** from each key press to the next frame (Event Timing), and the time in key handlers.
+- **Styles:** style recalculations and elements restyled per press.
+- **Layers:** composited layers on the page.
+
+`--throttle 6` slows the page's CPU about as much as a Cortex-A53 against this Mac's M1.
+
+**What the rig can and can't say.**
+
+- **Compositing:** the software GPU makes every frame cost about 45 ms to composite. An empty page costs 2 ms and one full-screen layer 7 ms, and switching off blur, shadows, filters, masks, rounded corners or artwork changed nothing measurable. That cost is SwiftShader's, and a real TV GPU (Mali-G31 class) fills several times faster, so the rig overstates GPU cost. It also can't show the cost of backdrop blur on tiled mobile GPUs.
+- **Main thread:** the main-thread work (JavaScript, style, layout) is real, and it scales with the CPU. That is what this pass cut.
+- **Noise:** timings vary with the Mac's own load. Work counts (elements restyled, layers, events) don't, so those are the main evidence.
+
+**Found and fixed** (commit "less work per remote press and while playing"):
+
+| Cost                                                  | Before                  | After                                              |
+| ----------------------------------------------------- | ----------------------- | -------------------------------------------------- |
+| Elements restyled per press (along a row / down rows) | ~700 / ~800             | ~100 / ~60                                         |
+| Composited layers on Discover                         | 74                      | 28                                                 |
+| Messages from the player while playing / paused       | 5 a second / 5 a second | about 2.5 a second / buffering only (≤ 1 a second) |
+| JavaScript during 7.7 s of playback                   | 477 ms                  | 234 ms                                             |
+
+1. **Placeholders:** rows further down Discover wait for the screen to come near before loading. Their pulsing placeholders were restyled on every frame the page drew: about 600 of the 700 elements restyled on each press. They now pulse only once their row is near.
+2. **Card menu button:** each card's "⋯" button had a backdrop blur, which is a composited layer and render pass per card. The button is a 70% black circle; it no longer blurs.
+3. **Poster rows:** a row re-rendered on every scroll frame. It now does so only when it reaches or leaves an end. Focus memory now compares identity before measuring every item.
+4. **Player:**
+   - The Media3 player sends the time twice a second, and only when it moved. Each message re-renders the 700-line player page.
+   - Nothing is sent while paused, except buffering at most once a second.
+   - The exact time is sent on pause and when a seek lands.
+
+**Press to frame, before and after.** Both builds were run back to back on the same emulator, the spike's build first, then this one. The latency is mostly the rig's slow compositing, so look at the changes, not the levels.
+
+| Route                      | Before (median / p90)                     | After (median / p90)                      |
+| -------------------------- | ----------------------------------------- | ----------------------------------------- |
+| Along a row                | 368 / 728 ms, 18 fps                      | 288 / 360 ms, 22 fps                      |
+| Down rows                  | 304 / 432 ms, 29 fps                      | 232 / 344 ms, 32 fps                      |
+| Down rows, CPU 6× slower   | 560 / 648 ms, 14 fps, 2.3 s of long tasks | 392 / 504 ms, 24 fps, 1.0 s of long tasks |
+| Along a row, CPU 6× slower | 288 / 616 ms, 18 fps                      | 408 / 520 ms, 19 fps                      |
+
+A second round ran after about 30 minutes of reloads. By then the emulator had slowed to 2–3 fps for both builds, as its memory swapped, so that round isn't comparable. The optimised build was ahead in it too.
+
+**Still to do** (in the TV UI pass):
+
+- **The player page:** it re-renders as a whole on each time update. Moving the clock and seek bar into components of their own would cut playback JavaScript again.
+- **The key handler:** at 6× throttling it still takes tens of milliseconds, mostly forced style and layout as it reads geometry after changing focus.
+- **Real devices:** every number here needs checking on a real box.
 
 ## Risks
 
@@ -257,3 +312,12 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-u
 Debug builds expose the WebView's DevTools protocol: `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`. The spike opened the player on a stream from there, by pushing a `/player` history entry with `{ url, title }` as its state.
 
 Player logs are under the logcat tag `KiroPlayer`, and commands under `Tauri/Plugin`.
+
+**Measuring smoothness.**
+
+1. Create the low-end rig: an AVD from the same image, with `hw.cpu.ncore=2` and `hw.ramSize=2048` in its `config.ini`.
+2. Start it: `emulator -avd Kiro_TV_LowEnd -gpu swiftshader_indirect -cores 2 -memory 2048`.
+3. Install a release build made with `pnpm tauri android build --apk --split-per-abi --target aarch64 --features tauri/devtools`, signed with the debug key (zipalign, then apksigner).
+4. Run `node scripts/android-perf.mjs latency|styles|layers [row|down] [--throttle 6]` from `apps/desktop`.
+
+Compare builds back to back: the emulator slows down after a long session, so restart it between rounds.
